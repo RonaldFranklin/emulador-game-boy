@@ -1,0 +1,169 @@
+name: emulador-game-boy-dev
+
+x-backend: &backend
+  image: emulador-game-boy-backend:dev
+  build:
+    context: .
+    target: backend
+  init: true
+  environment: &backend-env
+    PGHOST: database
+    PGPORT: "5432"
+    PGDATABASE: ${APP_DB_NAME:-emulador}
+    PGUSER: emulador
+    PGPASSWORD_FILE: /run/secrets/app_db_password
+    APP_ORIGIN: ${APP_ORIGIN:-http://127.0.0.1:5173}
+    PORT: "3001"
+    HOST: 0.0.0.0
+    COOKIE_SECURE: "false"
+    SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-168}
+    CATALOG_STORAGE_DIR: /data/catalog
+  secrets:
+    - app_db_password
+  networks:
+    - private
+
+services:
+  database:
+    image: postgres:18.6-bookworm
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: emulador
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+    secrets:
+      - postgres_password
+      - app_db_password
+    volumes:
+      - postgres_data:/var/lib/postgresql
+      - ./docker/init-db.sh:/docker-entrypoint-initdb.d/10-app-role.sh:ro
+    networks:
+      - private
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d emulador"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    <<: *backend
+    command: ["npm", "run", "migrate", "--workspace", "backend"]
+    depends_on:
+      database:
+        condition: service_healthy
+
+  bootstrap:
+    <<: *backend
+    # Only this short-lived process reads the private .env file. Its credentials
+    # never become container environment variables, frontend data or build args.
+    user: "0:0"
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [DAC_OVERRIDE]
+    security_opt: ["no-new-privileges:true"]
+    # Compose does not always recreate a stopped service when a secret source
+    # changes. Include its nonsecret path in the service configuration hash.
+    labels:
+      local.emulador.bootstrap-source: ${BOOTSTRAP_ENV_SOURCE:-./.env.example}
+    command: ["node", "backend/dist/cli/bootstrap-master-env.js"]
+    environment:
+      <<: *backend-env
+      BOOTSTRAP_ENV_FILE: /run/secrets/bootstrap_env
+    secrets:
+      - app_db_password
+      - bootstrap_env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  backend:
+    <<: *backend
+    volumes:
+      - catalog_data:/data/catalog
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  frontend:
+    image: emulador-game-boy-frontend:dev
+    build:
+      context: .
+      target: frontend
+    init: true
+    environment:
+      API_PROXY_TARGET: http://backend:3001
+    ports:
+      - "127.0.0.1:${WEB_PORT:-5173}:5173"
+    networks:
+      - private
+      - web
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  test:
+    <<: *backend
+    profiles: ["test"]
+    command: ["npm", "test"]
+    environment:
+      <<: *backend-env
+      PGUSER: postgres
+      PGPASSWORD_FILE: /run/secrets/postgres_password
+      NODE_ENV: test
+      CATALOG_STORAGE_DIR: /tmp/emulador-test-catalog
+    secrets:
+      - postgres_password
+    networks:
+      - private
+      - web
+    depends_on:
+      database:
+        condition: service_healthy
+
+  test-browser:
+    profiles: ["test"]
+    image: emulador-game-boy-browser:dev
+    build:
+      context: .
+      target: browser
+    init: true
+    ipc: private
+    shm_size: 1gb
+    environment:
+      <<: *backend-env
+      PGUSER: postgres
+      PGPASSWORD_FILE: /run/secrets/postgres_password
+      NODE_ENV: test
+      CATALOG_STORAGE_DIR: /tmp/emulador-browser-catalog
+    secrets:
+      - postgres_password
+    networks:
+      - private
+    depends_on:
+      database:
+        condition: service_healthy
+
+networks:
+  private:
+    internal: true
+  web:
+
+volumes:
+  postgres_data:
+  catalog_data:
+    name: ${CATALOG_VOLUME:-emulador-game-boy-dev_catalog_data}
+
+secrets:
+  postgres_password:
+    file: ./.local/secrets/postgres_password
+  app_db_password:
+    file: ./.local/secrets/app_db_password
+  bootstrap_env:
+    # setup selects the private file. With no selector, the empty public
+    # template permits existing databases to boot and new ones fail closed.
+    file: ${BOOTSTRAP_ENV_SOURCE:-./.env.example}

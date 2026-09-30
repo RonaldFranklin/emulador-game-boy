@@ -1,0 +1,25 @@
+{
+  "name": "emulador-game-boy",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": ["backend", "frontend"],
+  "engines": {"node": ">=24.16.0 <25", "npm": ">=11 <13"},
+  "packageManager": "npm@11.13.0",
+  "scripts": {
+    "setup": "node scripts/setup.mjs",
+    "prepare:emulator": "node scripts/vendor-emulator.mjs",
+    "build": "npm run build --workspaces",
+    "typecheck": "npm run typecheck --workspaces",
+    "test": "node --test --test-concurrency=1 tests/*.test.mjs",
+    "test:browser": "node scripts/test-browser.mjs",
+    "test:theme": "node scripts/test-theme.mjs",
+    "backup": "node scripts/backup.mjs",
+    "restore:verify": "node scripts/restore-verify.mjs",
+    "restore:recover": "node scripts/restore-recover.mjs",
+    "test:operations": "node scripts/test-operations.mjs",
+    "test:catalog-operations": "node scripts/test-catalog-operations.mjs",
+    "test:first-boot": "node scripts/test-first-boot.mjs"
+  },
+  "devDependencies": {"@playwright/test": "1.63.0"}
+}

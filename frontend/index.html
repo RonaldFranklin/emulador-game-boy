@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <style>
+      html { background: #f6f7f3; color-scheme: light; }
+      html[data-theme="dark"] { background: #101a16; color-scheme: dark; }
+    </style>
+    <script>
+      // Apply before the application or its styles load; storage may be blocked.
+      (() => {
+        let theme;
+        try {
+          const saved = localStorage.getItem('emulador-theme');
+          if (saved === 'light' || saved === 'dark') theme = saved;
+        } catch {}
+        if (!theme) {
+          try { theme = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
+          catch { theme = 'light'; }
+        }
+        document.documentElement.dataset.theme = theme;
+      })();
+    </script>
+    <meta name="theme-color" content="#20362d" />
+    <meta name="description" content="Catálogo de Game Boy e Game Boy Advance, com acesso por conta e administração de jogos e jogadores." />
+    <title>Emulador Game Boy · GB e GBA</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
