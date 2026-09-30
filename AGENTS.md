@@ -26,7 +26,7 @@ Antes de alterar o player, leia também docs/emulacao.md e docs/fontes-emulador.
 
 ## Forma de trabalhar
 
-O chat coordenador define escopo e revisa. A implementação deve ocorrer **no Codex dentro do VS Code conectado ao WSL, nunca no GitHub Copilot Chat**. Nesta sessão implementadora, execute as tarefas expressamente autorizadas. Se precisar encaminhar trabalho entre interfaces, confirme a extensão e sessão corretas; abrir o VS Code não comprova operação do Codex. Agentes internos desta execução podem colaborar dentro do mesmo escopo.
+O desenvolvimento ocorre **diretamente no chat do Codex dentro do VS Code conectado ao WSL, nunca no GitHub Copilot Chat**, sem depender de chat coordenador externo ou encaminhamento entre interfaces. O próprio Codex lê a documentação, alinha o escopo com o usuário, implementa, revisa, valida e documenta as tarefas autorizadas. Um chat novo deve seguir a ordem de leitura acima e conferir o estado atual do repositório e do ambiente, sem depender do histórico de conversas anteriores. Agentes internos podem colaborar dentro do mesmo escopo; essa colaboração é opcional.
 
 Trabalhe em etapas verificáveis. Distinga proposta, decisão, implementação e teste; atualize documentação e histórico sem transformar sugestões em requisitos. Não acesse servidor, publique ou faça push por inferência. Commit local depende de autorização: em 30/09/2026 foi autorizado o primeiro commit com baseline funcional, bootstrap pela .env e documentação revisada, após validação. Essa autorização não abrange push/publicação.
 
