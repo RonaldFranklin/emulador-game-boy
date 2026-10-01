@@ -39,6 +39,7 @@ Use `docker compose config --quiet` para validar a configuração sem imprimi-la
 É possível criar o primeiro master em um terminal TTY, sem guardar sua senha no `.env`. Depois de `npm run setup`, inicie o banco, aplique as migrações e use:
 
 ```bash
+docker compose build backend
 docker compose up -d database
 docker compose run --rm migrate
 docker compose run --rm --no-deps backend npm run bootstrap:master --workspace backend
@@ -66,7 +67,17 @@ Se mudar a porta, atualize também `APP_ORIGIN` e recrie os containers. Este Com
 
 ## Atualizar e diagnosticar
 
-Use `docker compose ps -a` e `docker compose logs --tail=100 backend frontend migrate bootstrap` para diagnóstico, sem imprimir configuração/segredos. `docker compose stop` e `docker compose start` param/retomam sem remover dados. Os fontes não são montados nos serviços: alterações executáveis exigem nova imagem.
+Use `docker compose ps -a` e `docker compose logs --tail=100 backend frontend migrate bootstrap` para diagnóstico, sem imprimir configuração/segredos. Os fontes não são montados nos serviços: alterações executáveis exigem nova imagem. `docker compose start` não reconstrói nem substitui containers antigos e pode reexecutar os serviços de init; não o use indiscriminadamente.
+
+Para parar uma instalação já provisionada, encerre os jogos com sincronização confirmada e use `docker compose stop frontend backend database`. Para retomar **os mesmos containers, sem atualização de código/schema**, após conferir a compatibilidade entre backend e banco:
+
+```bash
+docker start emulador-game-boy-dev-database-1
+# Aguarde o banco ficar healthy em docker compose ps.
+docker start emulador-game-boy-dev-backend-1 emulador-game-boy-dev-frontend-1
+```
+
+Isso não provisiona banco nem aplica alterações. Instalação nova segue `docker compose up -d --build` do README, usando o checkout atual completo; atualização segue os procedimentos abaixo.
 
 Para **somente frontend**, após validar o impacto:
 
@@ -93,6 +104,12 @@ O PostgreSQL permanece iniciado. Reconstrua/recrie apenas serviços afetados; a 
 Migrações em `backend/migrations/` são incrementais, transacionais e verificadas por checksum. Nunca edite uma já aplicada. A 004 criou nativos/reservas; a 005 ampliou rate limiting persistente; a 006 adicionou states e marcadores de reinício, sem converter nativos existentes. Não há rollback destrutivo automático.
 
 Testes e seleção proporcional estão em [desenvolvimento](desenvolvimento.md#validação-por-impacto); resultados efetivamente executados em [validação](validacao.md).
+
+### Pendência local de init antigo — 01/10/2026
+
+No incidente relatado nesta data, `compose start` tentou executar um container `migrate` antigo com somente a migração 001, enquanto banco e backend já estavam em 001–006. A execução falhou com rollback; depois da conferência do schema, backend/frontend existentes foram iniciados diretamente. Neste fechamento, inspeção somente leitura confirmou `migrate` em `Exited (1)` com apenas `001-auth.sql` e arquivos 001–006 no backend. Não foram repetidos SQL, migrações ou manutenção.
+
+O runner recusa migração aplicada ausente nos arquivos e reverte a transação; não remova registros/checksums para contornar essa proteção. A regularização desse container permanece pendente para uma manutenção autorizada, com backup verificado e imagem atual. `migrate` e `bootstrap` usam a mesma imagem de backend: o procedimento de atualização acima reconstrói essa imagem e `compose run --rm --no-deps migrate` cria um container novo a partir dela. Isso não atualiza o container antigo parado. Nunca reutilize esse init obsoleto em uma instalação nova.
 
 ## Persistência, backup e restauração
 
@@ -121,6 +138,7 @@ npm run restore:recover -- .local/backups/PASTA
 O comando restaura com o papel `emulador`, revoga as sessões/reservas recuperadas, preserva os saves e confere os arquivos em volume novo com permissões do backend. Imprime `APP_DB_NAME=...` e `CATALOG_VOLUME=...`. Para ativar, configure **ambos** no `.env`, anotando os valores anteriores. Mantenha o PostgreSQL iniciado e execute a sequência abaixo, avançando somente se cada comando terminar com sucesso:
 
 ```bash
+docker compose build backend
 docker compose stop backend
 docker compose run --rm --no-deps migrate
 docker compose run --rm --no-deps bootstrap

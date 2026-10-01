@@ -40,6 +40,9 @@ export function Player({ game, userId, request, onExit }: { game: Game; userId: 
   const [error, setError] = useState('');
   const [warning, setWarning] = useState('');
   const [fullscreen, setFullscreen] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const [moreControls, setMoreControls] = useState(false);
+  const maximized = fullscreen || expanded;
   const [status, setStatus] = useState('Aguardando início');
   const [conflict, setConflict] = useState(false);
   const [localCopy, setLocalCopy] = useState(false);
@@ -54,6 +57,7 @@ export function Player({ game, userId, request, onExit }: { game: Game; userId: 
   const resumeAfterSettings = useRef(false);
   const pauseEpoch = useRef(0);
   const held = useRef(new Map<string, Key>());
+  const [pressedKeys, setPressedKeys] = useState<Key[]>([]);
   const [canvasSize, setCanvasSize] = useState({ width: game.console === 'GB' ? 160 : 240, height: game.console === 'GB' ? 144 : 160 });
 
   function updatePreferences(next: PlayerPreferences) {
@@ -62,14 +66,15 @@ export function Player({ game, userId, request, onExit }: { game: Game; userId: 
   function release(source: string) {
     const key = held.current.get(source);
     held.current.delete(source);
+    if (key) setPressedKeys([...held.current.values()]);
     if (key && ![...held.current.values()].includes(key)) engine.current?.input(key, false);
   }
   function press(source: string, key: Key) {
     if (frozen.current || settingsOpen.current || held.current.has(source)) return;
-    held.current.set(source, key); engine.current?.input(key, true);
+    held.current.set(source, key); setPressedKeys([...held.current.values()]); engine.current?.input(key, true);
   }
   function releaseAll() {
-    held.current.clear(); actions.forEach(key => engine.current?.input(key, false));
+    held.current.clear(); setPressedKeys(previous => previous.length ? [] : previous); actions.forEach(key => engine.current?.input(key, false));
   }
   function openSettings() {
     if (busyRef.current) return;
@@ -97,7 +102,7 @@ export function Player({ game, userId, request, onExit }: { game: Game; userId: 
     if (!container) return;
     const width = game.console === 'GB' ? 160 : 240, height = game.console === 'GB' ? 144 : 160;
     const size = () => {
-      if (!fullscreen) container.style.height = `${Math.max(260, window.innerHeight - (container.getBoundingClientRect().top + window.scrollY) - 20)}px`;
+      if (!maximized) container.style.height = `${Math.max(272, window.innerHeight - (container.getBoundingClientRect().top + window.scrollY) - 20)}px`;
       else container.style.removeProperty('height');
       const available = Math.min(container.clientWidth / width, container.clientHeight / height);
       const target = preferences.size === 'fit' ? available : { compact: 2, medium: 3, large: 5 }[preferences.size];
@@ -108,7 +113,58 @@ export function Player({ game, userId, request, onExit }: { game: Game; userId: 
     const observer = new ResizeObserver(size); observer.observe(container); if (screen.current) observer.observe(screen.current);
     window.addEventListener('resize', size); size();
     return () => { observer.disconnect(); window.removeEventListener('resize', size); };
-  }, [game.console, preferences.size, fullscreen]);
+  }, [game.console, preferences.size, maximized]);
+
+  // Expanded mode is a same-page history entry: Back and Escape restore the layout.
+  useEffect(() => {
+    if (!expanded) return;
+    const marker = crypto.randomUUID();
+    history.pushState({ ...history.state, playerExpanded: marker }, '');
+    const back = () => { releaseAll(); setExpanded(false); };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !screen.current?.querySelector('dialog[open]')) back();
+    };
+    window.addEventListener('popstate', back);
+    document.addEventListener('keydown', escape);
+    return () => {
+      window.removeEventListener('popstate', back);
+      document.removeEventListener('keydown', escape);
+      if (history.state?.playerExpanded === marker) history.back();
+    };
+  }, [expanded]);
+
+  useLayoutEffect(() => {
+    if (!maximized) { setMoreControls(false); return; }
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const viewport = window.visualViewport;
+    const resize = () => {
+      screen.current?.style.setProperty('--expanded-height', `${viewport?.height ?? innerHeight}px`);
+      screen.current?.style.setProperty('--expanded-width', `${viewport?.width ?? innerWidth}px`);
+      screen.current?.style.setProperty('--expanded-top', `${viewport?.offsetTop ?? 0}px`);
+      screen.current?.style.setProperty('--expanded-left', `${viewport?.offsetLeft ?? 0}px`);
+    };
+    resize(); viewport?.addEventListener('resize', resize); viewport?.addEventListener('scroll', resize);
+    return () => {
+      document.body.style.overflow = previous;
+      viewport?.removeEventListener('resize', resize); viewport?.removeEventListener('scroll', resize);
+      releaseAll();
+    };
+  }, [maximized]);
+
+  async function toggleFullscreen() {
+    releaseAll();
+    if (expanded) { setExpanded(false); return; }
+    if (document.fullscreenElement === screen.current) {
+      try { await document.exitFullscreen(); }
+      catch { setWarning('Não foi possível sair da tela cheia. Tente novamente.'); }
+      return;
+    }
+    try {
+      if (!screen.current?.requestFullscreen) throw new Error('Fullscreen unavailable');
+      await screen.current.requestFullscreen();
+    } catch { if (alive.current) setExpanded(true); }
+  }
 
   function pause() {
     pauseEpoch.current += 1;
@@ -168,7 +224,7 @@ export function Player({ game, userId, request, onExit }: { game: Game; userId: 
       if (event.persisted && engine.current) { pause(); void sync.current?.renew().catch(fail); }
     };
     const blur = () => { releaseAll(); resumeAfterSettings.current = false; pauseEpoch.current += 1; };
-    const fullscreenChanged = () => setFullscreen(document.fullscreenElement === screen.current);
+    const fullscreenChanged = () => { releaseAll(); setFullscreen(document.fullscreenElement === screen.current); };
     const beforeUnload = (event: BeforeUnloadEvent) => {
       if (!engine.current) return;
       try { if (sync.current?.matchesConfirmed(engine.current.readNativeSave())) return; } catch { /* Keep warning if memory cannot be checked. */ }
@@ -364,7 +420,7 @@ export function Player({ game, userId, request, onExit }: { game: Game; userId: 
   }
 
   function touch(key: Key, label: string, text: string) {
-    return <button className={`touch-key touch-${key}`} type="button" aria-label={label} disabled={!ready || paused || settings}
+    return <button className={`touch-key touch-${key}`} type="button" aria-label={label} data-pressed={pressedKeys.includes(key)} disabled={!ready || paused || settings}
       onContextMenu={event => event.preventDefault()}
       onPointerDown={event => { if (event.button !== 0) return; event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId); press(`pointer:${event.pointerId}`, key); }}
       onPointerUp={event => release(`pointer:${event.pointerId}`)} onPointerCancel={event => release(`pointer:${event.pointerId}`)}
@@ -373,7 +429,7 @@ export function Player({ game, userId, request, onExit }: { game: Game; userId: 
       onKeyUp={event => release(`button:${key}:${event.code}`)} onBlur={releaseAll}>{text}</button>;
   }
 
-  return <section ref={screen} className="player" aria-label={`Jogando ${game.name}`}>
+  return <section ref={screen} className={`player${expanded ? " player-expanded" : ""}${moreControls ? " player-tools-open" : ""}${error || warning || busy ? " player-attention" : ""}`} aria-label={`Jogando ${game.name}`}>
     <div className="page-heading"><div><span className="eyebrow">SEU JOGO</span><h1>{game.name}</h1></div><ConsoleBadge console={game.console} /></div>
     {error && <Alert>{error}</Alert>}
     {warning && <div><Alert kind="info">{warning}</Alert><button className="button quiet" onClick={() => setWarning('')}>Dispensar aviso</button></div>}
@@ -390,7 +446,15 @@ export function Player({ game, userId, request, onExit }: { game: Game; userId: 
         void sync.current?.discardLocal().then(() => { setConflict(false); setError(''); }).catch(fail);
       }
     }}>Descartar cópia local e usar save do servidor</button></p>}
+    {expanded && <p className="expanded-notice" role="status">Tela cheia indisponível. Modo expandido: a interface do navegador permanece.</p>}
     <div className="player-toolbar">
+      {maximized && <button className="button secondary" aria-expanded={moreControls} aria-controls="player-tools-panel" onClick={() => { releaseAll(); setMoreControls(!moreControls); }}>{moreControls ? 'Menos controles' : 'Mais controles'}</button>}
+      {ready && <>
+      <button className="button secondary" onClick={() => void togglePause()} disabled={busy || !!error}>{paused ? 'Retomar' : 'Pausar'}</button>
+      <button className="button secondary" onClick={() => void toggleFullscreen()} aria-pressed={maximized}>{maximized ? 'Sair da tela cheia' : 'Tela cheia'}</button>
+      </>}
+      <div className="player-tools" id="player-tools-panel">
+      {maximized && <p className="player-tools-status" role="status">{status}</p>}
       <label className="player-size">Tamanho<select aria-label="Tamanho da tela" value={preferences.size} onChange={event => updatePreferences({ ...preferences, size: event.target.value as PlayerSize })}>
         <option value="compact">Compacto</option><option value="medium">Médio</option><option value="large">Grande</option><option value="fit">Ajustar ao espaço disponível</option>
       </select></label>
@@ -403,19 +467,13 @@ export function Player({ game, userId, request, onExit }: { game: Game; userId: 
       <button className="button secondary" aria-label="Configurações" disabled={busy} onClick={openSettings}><span aria-hidden="true">⚙</span> Configurações</button>
     {ready && <div className="player-actions">
       <button className="button secondary" disabled={busy||!!error} onClick={()=>void openSaves()}>Saves</button>
-      <button className="button secondary" onClick={() => void togglePause()} disabled={busy || !!error}>{paused ? 'Retomar' : 'Pausar'}</button>
       <label className="player-volume">Volume {preferences.volume}%<input aria-label="Volume" type="range" min="0" max="100" step="1" value={preferences.volume} onChange={event => {
         const volume = Number(event.target.value); updatePreferences({ ...preferences, volume }); engine.current?.setVolume(volume);
       }} /></label>
       <button className="button secondary" onClick={() => void toggleSound()} aria-pressed={!muted}>{muted ? 'Ativar áudio' : 'Silenciar'}</button>
-      <button className="button secondary" onClick={() => {
-        setWarning('');
-        if (document.fullscreenElement) void document.exitFullscreen().catch(() => setWarning('Não foi possível sair da tela cheia. Tente novamente.'));
-        else if (!screen.current?.requestFullscreen) setWarning('Tela cheia não está disponível neste navegador.');
-        else void screen.current.requestFullscreen().catch(() => setWarning('Tela cheia não está disponível neste navegador.'));
-      }} aria-pressed={fullscreen}>{fullscreen ? 'Sair da tela cheia' : 'Tela cheia'}</button>
     </div>}
     <button className="button primary" onClick={() => { if (ready) void leave(); else onExit(); }} disabled={busy}>{busy && ready ? 'Sincronizando…' : ready ? 'Salvar e voltar' : 'Voltar à biblioteca'}</button>
+      </div>
     </div>
     {!ready && manifest?.save && <p>Existe memória do cartucho no servidor ({new Date(manifest.save.updatedAt).toLocaleString('pt-BR')}). Ela será restaurada automaticamente. Escolha Continue/Continuar no menu do jogo, se houver uma partida gravada.</p>}
     <div ref={stage} className={`player-screen console-${game.console.toLowerCase()}`}>
@@ -423,7 +481,12 @@ export function Player({ game, userId, request, onExit }: { game: Game; userId: 
       {!ready && <div className="player-start">{busy ? <Loading>Carregando jogo e progresso…</Loading> : <button className="button primary" disabled={!manifest || conflict} onClick={() => void start()}>{manifest?.save ? 'Continuar jogo' : 'Iniciar jogo'}</button>}</div>}
     {preferences.showButtons && <div className="touch-controls" aria-label="Controles de toque">
       {game.console === 'GBA' && <div className="shoulder-controls">{touch('l', 'Botão L', 'L')}{touch('r', 'Botão R', 'R')}</div>}
-      <div className="touch-main"><div className="touch-directions">{touch('up', 'Direcional cima', '↑')}{touch('left', 'Direcional esquerda', '←')}{touch('down', 'Direcional baixo', '↓')}{touch('right', 'Direcional direita', '→')}</div>
+      <div className="touch-main"><div className="touch-directions">
+        <svg className="dpad-shell" viewBox="0 0 144 144" aria-hidden="true" focusable="false">
+          <defs><linearGradient id="dpad-face" x2="0" y2="1"><stop stopColor="var(--dpad-top)" /><stop offset="1" stopColor="var(--dpad-bottom)" /></linearGradient></defs>
+          <path d="M54 1H90Q95 1 95 6V48H138Q143 48 143 54V90Q143 95 138 95H96V138Q96 143 90 143H54Q48 143 48 138V96H6Q1 96 1 90V54Q1 48 6 48H48V6Q48 1 54 1Z" fill="url(#dpad-face)" stroke="#0c1e13" strokeWidth="2" />
+          <path d="M54 3H90M3 54V89M50 7V49H7M98 50H137M50 99V137" fill="none" stroke="#b8d5ad" strokeOpacity=".2" strokeLinecap="round" />
+        </svg>{touch('up', 'Direcional cima', '')}{touch('left', 'Direcional esquerda', '')}{touch('right', 'Direcional direita', '')}{touch('down', 'Direcional baixo', '')}<span className="touch-center" aria-hidden="true" /></div>
         <div className="touch-actions">{touch('b', 'Botão B', 'B')}{touch('a', 'Botão A', 'A')}</div></div>
       <div className="touch-system">{touch('select', 'Select', 'Select')}{touch('start', 'Start', 'Start')}</div>
     </div>}

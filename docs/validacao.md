@@ -479,3 +479,19 @@ Aplicação local concluída: backup anterior v4 sem states, restauração isola
 Revisados guia passo a passo, contratos, README, operação e continuidade contra a implementação atual: um nativo e quatro states, exclusão/administração, reserva após refresh, recuperação pendente e preferências. Removidas contradições vigentes e duplicações de procedimentos; registros de etapas anteriores permanecem históricos. Comandos/variáveis conferidos em package.json, Dockerfile, Compose, exemplo público de configuração e scripts, sem executar manutenção.
 
 Validação desta etapa: links locais e âncoras conferidos, revisão de versões/comandos/coerência, conteúdo elegível e staged inspecionado e `git diff --check`. Nenhum build ou teste da aplicação foi repetido; resultados das entregas anteriores foram reutilizados com seu escopo original. Não houve alteração funcional nem operação de banco/serviços. Arquivos privados, assets gerados, dependências e dados pessoais ficam fora do commit.
+
+## 01/10/2026 — volume, mobile e D-pad
+
+Resultados das implementações anteriores a este fechamento, conferidos nos logs locais; não são execuções novas da revisão documental:
+
+| Etapa | Evidência executada |
+| --- | --- |
+| Volume | 1 cenário Chromium: 0/50/100%, mouse/teclado/toque, temas claro/escuro, ganho real, mute e preferência. Inspeção visual dos extremos; tipos/build frontend passaram |
+| Mobile/fullscreen | 6 cenários focados de `player-ux.spec.mjs` passaram: proporções GB/GBA, tamanhos, fullscreen, fallback indisponível/recusado, Escape/Voltar, orientação simulada, controles ocultos, multitoque/cancelamento e volume. Verificação adicional de volume no painel fullscreen: 1 passou. Tipos/build frontend passaram |
+| Refinamento D-pad | 3 cenários selecionados passaram: layout/fullscreen GBA, fallback/orientação/centro neutro/diagonal+A e liberação por cancelamento/foco/saída. Inspeção visual portrait/landscape e temas. Build frontend, incluindo tipos, passou |
+
+Ensaios usaram React/mGBA reais, ROMs próprias sintéticas e API simulada em container sem rede/banco. Viewports incluíram 390×844, 844×390, 667×320 e 568×256, além de desktop. Não equivalem a aparelho físico, notch real ou navegador móvel; não houve ensaio de qualidade auditiva humana. Contratos de backend/saves não mudaram e suas evidências anteriores não foram repetidas. Somente frontend foi atualizado nas implementações; identidade/início de backend e banco permaneceram iguais. Usuário aprovou volume e D-pad.
+
+Logs/capturas ignorados pelo Git: `.local/volume/`, `.local/mobile-player/` e `.local/dpad-refine/`. Seleção documentada nos logs `check.log`, com `volume-fullscreen.log` na etapa mobile; contagens se sobrepõem e não representam uma suíte completa adicional.
+
+Neste fechamento: revisão dos arquivos pendentes e staged, links/âncoras locais, comandos/variáveis contra Compose/scripts e `git diff --check`. Inspeção somente leitura dos arquivos de migração dos containers confirmou a [pendência operacional](operacao.md#pendência-local-de-init-antigo--01102026); não consultou progresso pessoal nem executou migrações. Nenhum build/teste de aplicação novo, operação de dados/serviços ou implantação remota.

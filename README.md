@@ -69,7 +69,7 @@ As credenciais são lidas diretamente do arquivo pelo serviço temporário de bo
 
 ## Usar a aplicação
 
-O [guia de uso](docs/guia-de-uso.md) traz os passos para salvar no jogo e continuar, criar/carregar Save rápido e três slots manuais, gerenciar **Meus saves**, recuperar uma reserva após Ctrl+R e resolver pendências. Também explica controles, tamanho, volume e velocidade.
+O [guia de uso](docs/guia-de-uso.md) traz os passos para salvar no jogo e continuar, criar/carregar Save rápido e três slots manuais, gerenciar **Meus saves**, recuperar uma reserva após Ctrl+R e resolver pendências. Também explica tela cheia/modo expandido, controles touch, tamanho, volume e velocidade.
 
 **Salvar e voltar** sincroniza o cartucho; **Saves** guarda o instante exato. Carregar um estado antigo também restaura o cartucho daquele ponto. MASTER administra contas, catálogo e exclusão de saves em área separada, mas só joga com o próprio progresso.
 
@@ -79,13 +79,13 @@ A única porta publicada é `127.0.0.1:5173`; backend e PostgreSQL ficam privado
 
 ```bash
 docker compose logs --tail=100 backend frontend migrate bootstrap
-docker compose stop
-docker compose start
 
 # Com banco/backend iniciados: backup completo e verificação isolada
 npm run backup
 npm run restore:verify -- .local/backups/PASTA
 ```
+
+Para parar/retomar ou atualizar serviços, siga [operação](docs/operacao.md#atualizar-e-diagnosticar); `compose start` geral pode reexecutar containers antigos de init e não atualiza suas imagens.
 
 Substitua `PASTA` pelo destino impresso pelo backup. Contas/saves ficam no PostgreSQL; ROMs/capas, em volume privado. Guarde a **pasta completa** de backup. Nunca use `docker compose down -v` ou remova volumes para reiniciar a aplicação.
 

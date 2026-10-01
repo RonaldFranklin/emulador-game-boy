@@ -104,7 +104,7 @@ for(const console of ['GB','GBA']) test(`${console}: tamanhos, proporção, tema
   expect(fit.width).toBeGreaterThan(console==='GB'?560:720);
   await expect(button(page,'Botão L')).toHaveCount(console==='GB'?0:1);
   await button(page,'Tela cheia').click(); await expect.poll(()=>page.evaluate(()=>!!document.fullscreenElement)).toBe(true);
-  await geometry(page,console);await button(page,'Configurações').click();await expect(page.getByRole('dialog')).toBeVisible();await button(page,'Concluir').click();
+  await geometry(page,console);await button(page,'Mais controles').click();await button(page,'Configurações').click();await expect(page.getByRole('dialog')).toBeVisible();await button(page,'Concluir').click();
   await button(page,'Sair da tela cheia').click();
   for(const [width,height,theme] of [[390,844,'light'],[320,640,'dark'],[844,390,'dark']]) {
     await page.setViewportSize({width,height});await page.evaluate(t=>document.documentElement.dataset.theme=t,theme);await page.waitForTimeout(100);
@@ -113,7 +113,7 @@ for(const console of ['GB','GBA']) test(`${console}: tamanhos, proporção, tema
   await button(page,'Tela cheia').click();await expect.poll(()=>page.evaluate(()=>!!document.fullscreenElement)).toBe(true);await page.waitForTimeout(100);await geometry(page,console);
   expect(await page.locator('.player').evaluate(e=>e.scrollWidth<=e.clientWidth)).toBe(true);
   await page.screenshot({path:`.local/screenshots/player-ux-${console}-fullscreen-landscape.png`});
-  await button(page,'Mostrar botões').click();await expect(page.locator('.touch-controls')).toHaveCount(0);
+  await button(page,'Mais controles').click();await button(page,'Mostrar botões').click();await expect(page.locator('.touch-controls')).toHaveCount(0);
   await expect(button(page,'Configurações')).toBeVisible();await expect(button(page,'Salvar e voltar')).toBeVisible();
   await button(page,'Sair da tela cheia').click(); await leave(page);
 });
@@ -226,7 +226,7 @@ test('velocidade: preferência antiga, isolamento, fallback e controles acessív
   await button(page,'Configurações').click();await expect(button(page,'Remapear A')).toContainText('C');await button(page,'Concluir').click();
   await page.setViewportSize({width:375,height:720});await expect(speed).toBeVisible();
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
-  await button(page,'Tela cheia').click();await expect(speed).toBeVisible();await speed.selectOption('5');
+  await button(page,'Tela cheia').click();await button(page,'Mais controles').click();await expect(speed).toBeVisible();await speed.selectOption('5');
   await button(page,'Sair da tela cheia').click();await leave(page);
   await page.reload();await open(page,'GBA',false);await expect(speed).toHaveValue('5');
   state.userId=userB;await page.reload();await open(page,'GB',false);await expect(speed).toHaveValue('1');
@@ -259,4 +259,94 @@ test('velocidade: modal, pausa e perda de reserva congelam core; intervalos usam
   state.failRenew=true;await button(page,'Concluir').click();await expect(page.getByRole('alert')).toContainText('Falha sintética');
   const lost=await frames();await speed.selectOption('10');await page.waitForTimeout(120);expect(await frames()).toBe(lost);
   expect(await page.evaluate(()=>window.__intervals.filter(ms=>ms===2000||ms===30000))).toHaveLength(2);
+});
+
+test('volume: extremos visuais, interação e ganho real em temas/desktop/toque',async({page,context})=>{
+  await page.addInitScript(()=>{
+    const Original=window.AudioContext;window.__volumeAudio=[];
+    window.AudioContext=class extends Original {
+      constructor(...args){super(...args);window.__volumeAudio.push(this);}
+      createGain(){const gain=super.createGain();this.__gain=gain;return gain;}
+    };
+  });
+  await setup(page);await open(page,'GB');
+  const slider=page.getByRole('slider',{name:'Volume',exact:true});
+  const gain=()=>page.evaluate(()=>window.__volumeAudio.at(-1).__gain.gain.value);
+  await button(page,'Ativar áudio').click();
+  for(const [width,height,theme] of [[1280,900,'dark'],[1280,900,'light'],[390,844,'dark'],[390,844,'light']]){
+    await page.setViewportSize({width,height});await page.evaluate(t=>document.documentElement.dataset.theme=t,theme);
+    for(const value of [0,50,100]){
+      await slider.fill(String(value));await expect(page.locator('.player-volume')).toContainText(`Volume ${value}%`);
+      expect(await gain()).toBeCloseTo(value/100);await expectBits(page,0);
+      await page.locator('.player-volume').screenshot({path:`.local/screenshots/volume-${width}-${theme}-${value}.png`});
+    }
+    const style=await slider.evaluate(e=>{const s=getComputedStyle(e);return {padding:s.padding,border:s.borderWidth,height:e.getBoundingClientRect().height};});
+    expect(style.padding).toBe('0px');expect(style.border).toBe('0px');expect(style.height).toBeGreaterThanOrEqual(44);
+    await slider.scrollIntoViewIfNeeded();const box=await slider.boundingBox(),y=box.y+box.height/2;
+    await page.mouse.click(box.x+box.width/2,y);await expect(slider).toHaveValue('50');expect(await gain()).toBeCloseTo(.5);
+    await page.mouse.move(box.x+box.width/2,y);await page.mouse.down();await page.mouse.move(box.x+box.width-1,y,{steps:8});await page.mouse.up();await expect(slider).toHaveValue('100');
+    await page.mouse.move(box.x+box.width-8,y);await page.mouse.down();await page.mouse.move(box.x+1,y,{steps:8});await page.mouse.up();await expect(slider).toHaveValue('0');
+    await slider.press('End');await expect(slider).toHaveValue('100');expect(await gain()).toBe(1);
+    await slider.press('Home');await expect(slider).toHaveValue('0');expect(await gain()).toBe(0);
+    await slider.press('ArrowRight');await expect(slider).toHaveValue('1');await slider.press('ArrowLeft');await expect(slider).toHaveValue('0');
+  }
+  const cdp=await context.newCDPSession(page);const box=await slider.boundingBox(),y=box.y+box.height/2;
+  await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:box.x+8,y}]});
+  await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:box.x+box.width-1,y}]});
+  await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await expect(slider).toHaveValue('100');expect(await gain()).toBe(1);
+  await slider.fill('50');await button(page,'Silenciar').click();expect(await gain()).toBe(0);await expect(slider).toHaveValue('50');
+  await button(page,'Ativar áudio').click();expect(await gain()).toBeCloseTo(.5);
+  await slider.fill('0');await button(page,'Silenciar').click();await button(page,'Ativar áudio').click();expect(await gain()).toBe(0);
+  await button(page,'Tela cheia').click(); await button(page,'Mais controles').click();
+  for(const value of [0,50,100]) { await slider.fill(String(value)); expect(await gain()).toBeCloseTo(value/100); }
+  await slider.fill('0'); await button(page,'Sair da tela cheia').click();
+  await expectBits(page,0);expect(await page.evaluate(key=>JSON.parse(localStorage.getItem(key)).volume,prefKey(userA))).toBe(0);
+});
+
+
+for (const console of ['GB', 'GBA']) test(`${console}: maximizar mobile, fallback, orientação e D-pad em cruz`, async ({page, context}) => {
+  await page.setViewportSize({width:390,height:844}); await setup(page); await open(page,console);
+  await page.evaluate(() => { Element.prototype.requestFullscreen = undefined; });
+  await button(page,'Tela cheia').click();
+  await expect(page.locator('.player-expanded')).toBeVisible();
+  await expect(page.getByText('Tela cheia indisponível. Modo expandido: a interface do navegador permanece.')).toBeVisible();
+  for (const [width,height,theme] of [[390,844,'light'],[844,390,'dark'],[667,320,'light'],[568,256,'dark'],[1440,900,'dark']]) {
+    await page.setViewportSize({width,height}); await page.evaluate(t=>document.documentElement.dataset.theme=t,theme);
+    await page.waitForTimeout(100); await geometry(page,console);
+    const player = await page.locator('.player').boundingBox();
+    expect(player.height).toBeLessThanOrEqual(height); expect(player.y).toBe(0);
+    expect(await page.locator('.player').evaluate(e=>e.scrollHeight<=e.clientHeight)).toBe(true);
+    await page.screenshot({path:`.local/screenshots/player-max-${console}-${width}.png`});
+  }
+  await page.setViewportSize({width:844,height:390}); await page.waitForTimeout(100);
+  const rect=async name=>button(page,name).boundingBox();
+  const up=await rect('Direcional cima'),left=await rect('Direcional esquerda'),down=await rect('Direcional baixo'),right=await rect('Direcional direita');
+  expect(up.x).toBe(down.x); expect(left.y).toBe(right.y);
+  expect(up.y+up.height).toBe(left.y); expect(left.y+left.height).toBe(down.y);
+  expect(left.x+left.width).toBe(up.x); expect(up.x+up.width).toBe(right.x);
+  await page.locator('.touch-center').click(); await expectBits(page,0);
+  const cdp=await context.newCDPSession(page);
+  const point=(r,id)=>({x:r.x+r.width/2,y:r.y+r.height/2,id});
+  await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[point(up,1),point(right,2),point(await rect('Botão A'),3)]});
+  await expectBits(page,81);
+  await expect(button(page,'Direcional cima')).toHaveAttribute('data-pressed','true');
+  await expect(button(page,'Direcional direita')).toHaveAttribute('data-pressed','true');
+  await cdp.send('Input.dispatchTouchEvent',{type:'touchCancel',touchPoints:[]}); await expectBits(page,0);
+  await button(page,'Mais controles').click(); await geometry(page,console);
+  await page.screenshot({path:`.local/screenshots/player-max-${console}-menu.png`});
+  await button(page,'Mostrar botões').click();
+  await page.getByLabel('Tamanho da tela').selectOption('compact');
+  await expect(button(page,'Configurações')).toBeVisible();
+  await button(page,'Menos controles').click(); await geometry(page,console);
+  await page.keyboard.press('Escape'); await expect(page.locator('.player-expanded')).toHaveCount(0);
+  await expect(page.getByLabel('Tamanho da tela')).toHaveValue('compact');
+  await expect(page.locator('.touch-controls')).toHaveCount(0);
+  await expect.poll(()=>page.evaluate(()=>document.body.style.overflow)).toBe('');
+  // Rejection follows the same path; browser Back removes only expanded mode.
+  await page.evaluate(() => { Element.prototype.requestFullscreen = () => Promise.reject(new Error('denied')); });
+  await button(page,'Tela cheia').click(); await expect(page.locator('.player-expanded')).toBeVisible();
+  await page.goBack(); await expect(page.locator('.player-expanded')).toHaveCount(0);
+  await expect(button(page,'Pausar')).toBeVisible();
+  await button(page,'Tela cheia').click(); await button(page,'Sair da tela cheia').click();
+  await expect(page.locator('.player-expanded')).toHaveCount(0);
 });

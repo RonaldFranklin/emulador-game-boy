@@ -87,4 +87,10 @@ O usuário autorizou expressamente o **primeiro commit local** do baseline funci
 
 Contratos e motivos em [decisões](decisoes.md), [emulação](emulacao.md) e [saves](saves.md). Resultados reais e limitações de cada etapa permanecem em [validação](validacao.md), sem reapresentá-los como testes deste fechamento.
 
-Após avaliação positiva inicial dos states pelo usuário, autorizado commit local das melhorias acumuladas na branch atual. Fechamento restrito à revisão/documentação: guia organizado por tarefas, operação consolidada, preferência duradoura de documentação útil em AGENTS e [resumo de continuidade](desenvolvimento.md#continuidade--fechamento-de-30092026). Sem nova funcionalidade, manutenção de dados, push ou implantação remota.
+Após avaliação positiva inicial dos states pelo usuário, autorizado commit local das melhorias acumuladas na branch atual. Fechamento restrito à revisão/documentação: guia organizado por tarefas, operação consolidada, preferência duradoura de documentação útil em AGENTS e [resumo de continuidade](desenvolvimento.md#continuidade--fechamento-de-01102026). Sem nova funcionalidade, manutenção de dados, push ou implantação remota.
+
+## 01/10/2026 — volume, mobile e D-pad clássico
+
+Corrigida a geometria do slider de volume sem alterar ganho/mute/preferências. Player maximiza canvas e toque, com fallback na página, Mais controles e retorno ao layout anterior. D-pad refinado como peça contínua, preservando centro neutro, alvos independentes e multitoque. Usuário testou e aprovou os resultados; autorizou este fechamento com commit local na branch atual.
+
+Guia de uso, contrato do player, continuidade e operação revisados; registrada a pendência do init local antigo, sem executá-lo. [Evidências](validacao.md#01102026--volume-mobile-e-d-pad) das etapas reaproveitadas; fechamento apenas documental e Git, sem repetir builds/suítes, alterar dados/serviços, fazer push ou implantar em servidor.

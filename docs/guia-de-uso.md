@@ -80,10 +80,22 @@ A aba que perder a reserva pausa quando detectar a perda e preserva pendências 
 | Mostrar botões | Exibe/oculta controles de toque sobrepostos; direção e ação podem ser usadas juntas. L/R somente no GBA |
 | Configurações → Controles | Selecione a ação e pressione uma tecla. Conflito exige **Trocar vínculos** ou **Cancelar captura**; Escape cancela. **Restaurar padrão** redefine só o teclado |
 | Tamanho | **Ajustar ao espaço disponível** é o padrão; Compacto, Médio e Grande também respeitam espaço e proporção GB/GBA, sem suavizar pixels |
-| Tela cheia | Mantém controles e acesso a Saves/configurações; em janelas muito baixas pode haver rolagem vertical |
+| Tela cheia | Maximiza jogo e controles de toque; **Mais controles** abre Saves, configurações, tamanho, áudio e saída para a biblioteca. **Sair da tela cheia** restaura o layout |
 | Volume | Slider 0–100%, padrão 70%. Em 0%, continua sem som até aumentar |
 | Silenciar / Ativar áudio | Silenciar preserva o volume escolhido. O player inicia silenciado; ativação depende de clique/toque |
 | Velocidade | 1× padrão; 2×, 3×, 5× e 10× como alvos limitados pelo aparelho, sem reiniciar o jogo |
+
+### Maximizar no celular ou desktop
+
+1. Com o jogo iniciado, toque em **Tela cheia**. Gire o celular se desejar; não há trava de orientação. Use **Ajustar ao espaço disponível** para aproveitar a área sem distorcer GB/GBA.
+2. **Pausar/Retomar** e **Sair da tela cheia** permanecem visíveis. Abra **Mais controles** para consultar a sincronização e acessar Saves, configurações, tamanho, velocidade, volume, Mostrar botões e Salvar e voltar. Em telas baixas, role esse painel; **Menos controles** o recolhe.
+3. **Sair da tela cheia** restaura o layout, preservando tamanho e visibilidade dos botões. Escape também sai quando disponível. Sair da maximização não encerra o jogo nem substitui **Salvar e voltar**.
+
+Se fullscreen não for suportado ou for recusado, o player avisa e usa **modo expandido dentro da página**: a interface do navegador permanece. Nesse modo, Voltar também desfaz a expansão. O acesso continua restrito ao ambiente local configurado; maximizar não disponibiliza o site na rede.
+
+O D-pad clássico é uma cruz visual única com quatro zonas independentes: o círculo central é neutro. É possível combinar direções e usar direção junto com A/B por multitoque. Os demais botões mantêm suas funções; L/R aparecem somente no GBA.
+
+### Áudio e preferências
 
 **Acima de 1× o áudio fica temporariamente silenciado.** Voltar a 1× respeita mute/volume e o gesto exigido pelo navegador, sem reproduzir fila antiga. Acelerar não aumenta a frequência de requisições ou de sincronização de saves. Pausa, configuração e aba oculta interrompem o avanço; não há compensação do tempo parado.
 
