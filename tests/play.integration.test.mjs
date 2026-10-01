@@ -148,7 +148,7 @@ describe('Player privado e save nativo com banco isolado', { concurrency: false 
     const attempts = await Promise.all([1,2].map(() => request(playPath(g,'/lease'),{method:'POST',session:player,body:{}})));
     assert.deepEqual(attempts.map(r=>r.status).sort(),[201,409]);
     const lease = attempts.find(r=>r.status===201).data;
-    assert.deepEqual(lease.save,{dataBase64:null,sha256:null,version:0,updatedAt:null});
+    assert.deepEqual(lease.save,{epoch:null,dataBase64:null,sha256:null,version:0,updatedAt:null});
     const persisted = (await pool.query('SELECT * FROM play_leases WHERE user_id=$1 AND game_id=$2',[player.id,g.id])).rows[0];
     assert.equal(persisted.token_hash,checksum(Buffer.from(lease.leaseId)));
     assert.ok(!JSON.stringify(persisted).includes(lease.leaseId));
@@ -338,4 +338,119 @@ describe('Player privado e save nativo com banco isolado', { concurrency: false 
     const empty = await game(); await acquire(empty);
     assert.equal(await stored(empty),undefined);
   });
+  test('takeover CAS tem um vencedor, isola usuário/jogo e invalida dono antigo', async () => {
+    const g = await game(), lease = await acquire(g), bytes = Buffer.from('confirmed-before-takeover');
+    assert.equal((await save(g, lease, bytes)).status, 200);
+    const observed = await request(playPath(g, '/lease'), { session: player });
+    assert.equal(observed.status, 200);
+    const generation = observed.data.reservation.generation;
+    assert.match(generation, /^[a-f0-9]{64}$/);
+    assert.ok(!JSON.stringify(observed.data).includes(lease.leaseId));
+    assert.equal((await request(playPath(g, '/lease'), { session: other })).data.reservation, null);
+    const take = (session = player, target = g) => request(playPath(target, '/lease'), { method: 'POST', session, body: { expectedGeneration: generation } });
+    assert.equal((await take(other)).status, 409);
+    const otherGame = await game(); assert.equal((await take(player, otherGame)).status, 409);
+    assert.equal((await request(playPath(g, '/lease'), { method: 'POST', session: player, body: { expectedGeneration: generation }, headers: { 'X-CSRF-Token': null } })).status, 403);
+    const attempts = await Promise.all([take(), take()]);
+    assert.deepEqual(attempts.map(r => r.status).sort(), [201, 409]);
+    const winner = attempts.find(r => r.status === 201).data;
+    assert.notEqual(winner.leaseId, lease.leaseId);
+    assert.equal(winner.save.dataBase64, bytes.toString('base64'));
+    assert.equal((await take()).status, 409);
+    assert.equal((await save(g, lease, Buffer.from('obsolete'), 1)).status, 409);
+    assert.equal((await request(playPath(g, '/lease/renew'), { method: 'POST', session: player, body: { leaseId: lease.leaseId } })).status, 409);
+    assert.equal((await request(playPath(g, '/lease'), { method: 'DELETE', session: player, body: { leaseId: lease.leaseId } })).status, 204);
+    assert.equal((await request(playPath(g, '/lease/renew'), { method: 'POST', session: player, body: { leaseId: winner.leaseId } })).status, 200);
+    assert.deepEqual((await stored(g)).data, bytes);
+    await pool.query("UPDATE game_saves SET updated_at=clock_timestamp()-interval '2 seconds' WHERE user_id=$1 AND game_id=$2", [player.id,g.id]);
+    assert.equal((await save(g, winner, Buffer.from('new-owner'), 1)).status, 200);
+    await pool.query('UPDATE games SET active=false WHERE id=$1', [g.id]);
+    assert.equal((await take()).status, 404);
+  });
+
+  test('takeover protege contra save, renovação e liberação antigos já em voo', async () => {
+    const g = await game(), lease = await acquire(g), bytes = Buffer.from('safe');
+    assert.equal((await save(g, lease, bytes)).status, 200);
+    const generation = (await request(playPath(g, '/lease'), { session: player })).data.reservation.generation;
+    const client = await pool.connect();
+    const pending = [];
+    const blocked = async count => waitFor(async () => Number((await pool.query(
+      "SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'SELECT * FROM users WHERE id =%'"
+    )).rows[0].count) >= count);
+    try {
+      await client.query('BEGIN'); await client.query('SELECT id FROM users WHERE id=$1 FOR UPDATE', [player.id]);
+      pending.push(request(playPath(g, '/lease'), { method:'POST', session:player, body:{expectedGeneration:generation} }));
+      await blocked(1);
+      pending.push(save(g, lease, Buffer.from('late'), 1));
+      pending.push(request(playPath(g, '/lease/renew'), {method:'POST',session:player,body:{leaseId:lease.leaseId}}));
+      pending.push(request(playPath(g, '/lease'), {method:'DELETE',session:player,body:{leaseId:lease.leaseId}}));
+      await blocked(4); await client.query('COMMIT');
+      const [next, oldSave, oldRenew, oldRelease] = await Promise.all(pending);
+      assert.deepEqual([next.status,oldSave.status,oldRenew.status,oldRelease.status],[201,409,409,204]);
+      assert.equal((await request(playPath(g,'/lease/renew'),{method:'POST',session:player,body:{leaseId:next.data.leaseId}})).status,200);
+      assert.deepEqual((await stored(g)).data,bytes);
+    } finally { await client.query('ROLLBACK'); client.release(); await Promise.allSettled(pending); }
+  });
+
+  test('states: slots/versionamento, permissões, lease, corrupção, reset nativo e reinício',async()=>{
+   const {STATE_CORE}=await import('../backend/dist/play/states.service.js');
+   const g=await game(),lease=await acquire(g),native=Buffer.from('native-before');await save(g,lease,native);
+   const meta=(await request(playPath(g,'/states'),{session:player})).data;
+   const data=Buffer.alloc(71680,7);
+   const payload={leaseId:lease.leaseId,version:0,label:'Ponto',coreId:STATE_CORE,romHash:meta.romHash,format:1,dataBase64:data.toString('base64'),nativeBase64:native.toString('base64'),sha256:checksum(data),nativeSha256:checksum(native)};
+   const put=(body=payload,slot=0,session=player)=>request(playPath(g,`/states/${slot}`),{method:'PUT',session,body});
+   assert.equal((await put({...payload,sha256:'0'.repeat(64)})).status,400);
+   assert.equal((await put({...payload,coreId:'wrong'})).status,400);
+   assert.equal((await put({...payload,dataBase64:Buffer.alloc(71679).toString('base64'),sha256:checksum(Buffer.alloc(71679))})).status,400);
+   assert.equal((await put(payload,4)).status,413); // route-scoped parser does not accept extra slots
+   assert.equal((await put(payload,0,other)).status,409);
+   assert.equal((await request(playPath(g,'/states/0'),{method:'PUT',session:player,headers:{'X-CSRF-Token':null},body:payload})).status,403);
+   const oversized=Buffer.alloc(524289);assert.equal((await put({...payload,dataBase64:oversized.toString('base64'),sha256:checksum(oversized)})).status,400);
+   const results=await Promise.all([put(),put({...payload,label:'Concurrent'})]);assert.deepEqual(results.map(r=>r.status).sort(),[200,409]);
+   const first=(await request(playPath(g,'/states'),{session:player})).data.slots[0];
+   const winner={...payload,label:first.label};assert.equal((await put(winner)).status,200);
+   assert.equal((await request('/api/saves?admin=true',{session:player})).status,403);
+   assert.equal((await request('/api/saves',{session:other})).data.saves.length,0);
+   assert.ok((await request('/api/saves?admin=true',{session:master})).data.saves.some(r=>r.user_id===player.id&&r.game_id===g.id));
+   const foreign=await acquire(g,master);
+   assert.equal((await request(playPath(g,'/states/0/load'),{method:'POST',session:master,body:{leaseId:foreign.leaseId,version:1}})).status,404);
+   const generation=(await request(playPath(g,'/lease'),{session:player})).data.reservation.generation;
+   const next=(await request(playPath(g,'/lease'),{method:'POST',session:player,body:{expectedGeneration:generation}})).data;
+   assert.equal((await put({...winner,version:1})).status,409);
+   assert.equal((await request(playPath(g,'/states/0/load'),{method:'POST',session:player,body:{leaseId:lease.leaseId,version:1}})).status,409);
+   const del=(kind,session=player,owner=player.id,v=1)=>request(`/api/saves/${owner}/${g.id}/${kind}`,{method:'DELETE',session,body:{version:v,confirmation:'EXCLUIR'}});
+   assert.equal((await del('native')).status,409);
+   assert.equal((await del('0',other)).status,403);
+   const locked=await pool.connect();try{await locked.query('BEGIN');await locked.query('SELECT id FROM users WHERE id=$1 FOR UPDATE',[player.id]);assert.equal((await del('0',master)).status,409);}finally{await locked.query('ROLLBACK');locked.release();}
+   await app.close();await start();
+   const loaded=await request(playPath(g,'/states/0/load'),{method:'POST',session:player,body:{leaseId:next.leaseId,version:1}});assert.equal(loaded.status,201);assert.equal(loaded.data.state.dataBase64,payload.dataBase64);
+   await request(playPath(g,'/lease'),{method:'DELETE',session:player,body:{leaseId:next.leaseId}});
+   assert.equal((await del('native',master)).status,204); // Nest method default for DELETE controller is 204
+   const reset=await acquire(g);assert.equal(reset.save.version,0);assert.ok(reset.save.epoch);
+   assert.equal((await save(g,reset,native)).status,409);
+   assert.equal((await request(playPath(g,'/save'),{method:'PUT',session:player,body:{...saveBody(reset,native),epoch:reset.save.epoch}})).status,200);
+   assert.equal((await del('0',master)).status,204);
+   assert.equal((await put({...payload,leaseId:reset.leaseId,version:1})).status,409);
+   assert.equal((await put({...payload,leaseId:reset.leaseId,version:2})).status,200);
+   await request(playPath(g,'/lease'),{method:'DELETE',session:player,body:{leaseId:reset.leaseId}});
+   assert.equal((await del('native',master)).status,409); // stale confirmation cannot delete a new version 1
+   assert.ok(await stored(g));
+  });
+
+  test('states: quotas de usuário/global em PostgreSQL isolado',async()=>{
+   const {STATE_CORE}=await import('../backend/dist/play/states.service.js');
+   const g=await game(),lease=await acquire(g),data=Buffer.alloc(71680,9),native=Buffer.alloc(1048576,8);
+   const meta=(await request(playPath(g,'/states'),{session:player})).data;
+   const payload={leaseId:lease.leaseId,version:0,label:'Quota',coreId:STATE_CORE,romHash:meta.romHash,format:1,dataBase64:data.toString('base64'),nativeBase64:native.toString('base64'),sha256:checksum(data),nativeSha256:checksum(native)};
+   const ids=[];
+   for(let i=0;i<239;i++){const id=randomUUID();ids.push(id);await pool.query("INSERT INTO games(id,name,active,rom_key,rom_sha256,rom_size,cartridge_type,cgb_flag,console) VALUES($1,'Quota fixture',true,$2,$3,32768,3,0,'GB')",[id,id+'.gb',checksum(Buffer.from(id))]);}
+   async function fill(owner,gameIds){await pool.query(`INSERT INTO save_states(user_id,game_id,slot,version,label,console,rom_sha256,core_id,format,data,native,sha256,native_sha256) SELECT $1,id,0,1,'Quota','GB',rom_sha256,$2,1,$3,$4,$5,$6 FROM games WHERE id=ANY($7::uuid[])`,[owner,STATE_CORE,data,native,checksum(data),checksum(native),gameIds]);}
+   await fill(player.id,ids.slice(0,29));
+   assert.equal((await request(playPath(g,'/states/1'),{method:'PUT',session:player,body:payload})).status,507);
+   await pool.query('DELETE FROM save_states WHERE game_id=ANY($1::uuid[])',[ids]);
+   for(let i=0;i<9;i++){const owner=randomUUID();await pool.query("INSERT INTO users(id,username,password_hash,role) VALUES($1,$2,$3,'JOGADOR')",[owner,'quota_'+i,hash]);await fill(owner,ids.slice(i*27,(i+1)*27));}
+   assert.equal((await request(playPath(g,'/states/1'),{method:'PUT',session:player,body:payload})).status,507);
+   assert.equal((await pool.query('SELECT count(*)::int AS n FROM save_states WHERE user_id=$1 AND game_id=$2',[player.id,g.id])).rows[0].n,0);
+  });
+
 });

@@ -78,6 +78,9 @@ services:
 
   backend:
     <<: *backend
+    environment:
+      <<: *backend-env
+      TRUSTED_PROXY_HOST: frontend
     volumes:
       - catalog_data:/data/catalog
     depends_on:

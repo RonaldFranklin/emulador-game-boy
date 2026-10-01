@@ -277,7 +277,7 @@ Health, JS/WASM e página de licenças locais responderam 200; ROM sem sessão r
 
 ### Limites reais
 
-Chromium com viewports móveis não substitui aparelhos físicos, Safari/Firefox ou teste auditivo humano. Há sinal PCM real, mas a qualidade/performance precisa de avaliação pelo usuário no seu equipamento. O núcleo upstream fixado é uma revisão de desenvolvimento; não há matriz completa de cartuchos, EEPROM, RTC, sensores ou acessórios validada. Não há BIOS proprietária, save state, importação/exportação, múltiplos slots ou administração de saves.
+Chromium com viewports móveis não substitui aparelhos físicos, Safari/Firefox ou teste auditivo humano. Há sinal PCM real, mas a qualidade/performance precisa de avaliação pelo usuário no seu equipamento. O núcleo upstream fixado é uma revisão de desenvolvimento; não há matriz completa de cartuchos, EEPROM, RTC, sensores ou acessórios validada. Na entrega original não havia save state/slots/administração; essa restrição foi substituída na ampliação registrada abaixo. BIOS proprietária e importação/exportação continuam fora.
 
 Sincronização a cada 2 s e na pausa/saída reduz risco; interrupção abrupta, storage/rede indisponível ou saída durante a gravação interna do jogo ainda podem perder progresso. Recuperação local só entra no backup depois de sincronizada. Bytes da ROM chegam ao navegador autorizado; não há promessa de DRM. Permanecem pendentes backup externo criptografado, retenção automática, restauração em outra máquina, testes físicos. Sem acesso ao servidor, commit, push ou publicação.
 
@@ -322,3 +322,160 @@ Backup final `emulador-2026-09-30T21-04-18.443Z-53165940` restaurado isoladament
 Revisados todos os 127 arquivos elegíveis: fontes, testes, scripts, configuração, lockfile e documentos. Somente texto; fixtures são programas sintéticos gerados pelo teste. `.env`, `.local`, ROMs, saves, backups, dependências instaladas e assets gerados permanecem ignorados. Contexto administrativo anterior foi preservado em arquivo privado ignorado antes da generalização. Lockfile confere com os manifests e usa o registro oficial npm e workspaces locais; configuração/autor Git existentes preservados. Autorização abrange somente commit local, sem push, publicação ou acesso a servidor.
 
 Permanecem as limitações de emulação/operação da etapa anterior; esta tarefa não acrescenta funções ao player nem repete toda a matriz de cartuchos/navegadores.
+
+## Segurança de login, IP e SQL — 30/09/2026
+
+Revisão e implementação locais autorizadas, com reutilização de `login_attempts` e consultas parametrizadas existentes. Nenhuma concatenação vulnerável de entrada HTTP foi identificada na revisão; os testes abaixo são evidência de regressão, não alegação de vulnerabilidade anterior.
+
+- `npm run typecheck` e `npm run build`: aprovados nos dois workspaces.
+- `docker compose config --quiet`: aprovado; somente frontend publicado em loopback, banco/backend privados.
+- `docker compose build backend frontend test-browser`: imagens locais compiladas; sem mudança de core/dependências.
+- `docker compose run --rm --no-deps test`: **71 testes aprovados**, zero falhas. Bases/pastas aleatórias próprias, removidas pelo ensaio.
+- Novos cenários HTTP: terceira falha/7200 segundos, nomes distintos no mesmo IP, acertos sem apagar falhas, IPs independentes, prazo imutável, janela móvel, expiração por datas SQL na base isolada, reinício de API, vinte requisições concorrentes distribuídas entre duas instâncias. Com duas falhas prévias, a rajada verifica somente **uma** senha adicional; todas as respostas da rajada são 429 e o histórico termina com três falhas.
+- Limites de conta, rajada e geral testados independentemente, incluindo URLs de login com maiúsculas aceitas pelo Express, expiração e `Retry-After`. Nenhum ajuste do relógio real ou espera de duas horas.
+- Spoofing direto ignorado; endereço de proxy reconhecido exige um único IP válido. IPv4 mapeado/IPv6 normalizados; listas e zona de interface recusadas.
+- Payloads SQL: credenciais/UUIDs inválidos recusados pelo contrato; nome de jogo e bytes de save com sintaxe SQL persistem literalmente. Listagens não usam parâmetros desconhecidos como SQL. Sessão, entrega de ROM, renovação de reserva e gravação de save continuam disponíveis durante bloqueio de login; bytes/versão e tabela de usuários conferidos.
+- `npm run test:browser`: **50 cenários Chromium aprovados**, incluindo UI 429 real, sanitização pelo Vite, distinção de sockets clientes, sessão já autenticada preservada e regressão completa de catálogo/player GB/GBA/saves/temas. Repetido após a revisão final de casos de borda.
+- `node scripts/test-security-proxy.mjs`: aprovado em rede Docker interna própria, com API/Vite e dois clientes separados, sem portas publicadas. Endereços observados no banco correspondem aos clientes, não ao proxy nem aos cabeçalhos forjados. Terceira falha retorna 429/7200; reinício do container da API preserva o prazo; health funciona antes de existir o frontend. Aplicação/migração do ensaio usam papel `emulador`, sem superusuário/criação de bancos. Recursos próprios removidos.
+
+Limitações: clientes que chegam ao Vite atrás do mesmo NAT/Docker Desktop podem compartilhar IP e bloqueio; bots com múltiplos IPs não são impedidos. Limites gerais são compartilhados por IP, inclusive entre sessões válidas, e não substituem dimensionamento para exposição pública. A aplicação continua exclusivamente local. Evidências não comprovam outros navegadores ou aparelhos físicos. O teste de persistência reinicia a API, sem reiniciar o PostgreSQL ativo.
+
+
+Operação local concluída após validação: backup conjunto anterior restaurado com sucesso em container sem rede/portas/volume persistente; aplicada somente a migração 005 e recriados backend/frontend. PostgreSQL e volumes mantidos, sem reinício do banco. Health retornou 200 e `/api/auth/me` sem cookie retornou 401 pela cadeia Vite/backend. Nenhuma tentativa de login ou teste de bloqueio foi executado contra contas do banco ativo.
+
+Snapshot privado de contagens e SHA-256 de linhas confirmou contas, sessões, catálogo, saves e reservas idênticos antes/depois. Manifestos dos backups confirmaram ROMs/capas com mesmos arquivos, tamanhos e checksums. Backup final também restaurado e verificado em isolamento. Os caminhos e logs locais ficam em `.local/security-maintenance/`, ignorado; dados administrativos e inventário pessoal não integram este documento. `git diff --check` aprovado. Nenhum commit, push ou implantação remota; `AGENTS.md` preservado.
+
+
+## Experiência do player — validação proporcional — 30/09/2026
+
+Alteração exclusivamente de frontend: tamanho/controles/modal/preferências locais. Selecionados testes dos fluxos afetados, sem repetir as suítes de autenticação, segurança, catálogo, migrações, backup/restauração ou a matriz inteira do motor. As 71 verificações de API/migração e 50 cenários Chromium da etapa de segurança acima são **evidência anterior**, não resultados novos desta etapa. Core, adaptador e contratos de save permanecem intactos. A única mudança em App é uma classe de largura ativa durante o player; a volta à biblioteca é coberta pelo smoke, sem alterar outros fluxos.
+
+Comandos executados:
+
+```bash
+npm run typecheck --workspace frontend
+npm run build --workspace frontend
+node scripts/test-player-ux.mjs
+docker compose build frontend
+docker compose up -d --no-deps frontend
+curl --fail http://127.0.0.1:5173/api/health
+git diff --check
+```
+
+Tipos/build frontend aprovados. **Sete cenários Chromium focados aprovados**, sem erros JavaScript não tratados:
+
+| Cobertura atual | Evidência |
+| --- | --- |
+| GB e GBA | Quatro tamanhos, Ajustar padrão, proporções 160/144 e 240/160, renderização pixelated, desktop 1440×1080 e telas 390×844, 320×640 e 844×390 |
+| Layout/tema/tela cheia | Tema claro/escuro, tela cheia real em desktop e horizontal, canvas contido na área, sem rolagem horizontal; botões ≥44 px e sem sobreposição entre alvos; configurações/saída continuam acessíveis com botões ocultos |
+| Entrada | Multitouch via CDP com direção+A simultâneos; fontes teclado/toque e dois Shift mantêm a mesma ação até liberar a última fonte; cancelamento, foco, ocultação e saída liberam entradas |
+| Configurações | Todos os dez vínculos exercitados no core GBA; conflito sem mudança silenciosa, troca explícita, Escape/cancelamento e reset; captura não avança quadros nem envia entradas ao jogo |
+| Pausa/segurança da entrada | Pausa anterior preservada, retomada quando apropriada, perda de foco ou erro na renovação impede retorno automático; campos editáveis e atalho Ctrl não alimentam o jogo; tecla capturada mantida pressionada não reentra por repetição |
+| Preferências | Reabertura/reload, isolamento e retorno entre dois UUIDs de usuário no mesmo contexto, JSON/versão/vínculos inválidos ou duplicados/tecla reservada e storage indisponível |
+| Smoke de player | Core real executa ROM sintética; tecla remapeada altera byte do cartucho; fluxo existente confirma save na API simulada e sai à biblioteca; erro de renovação mantém pausa |
+
+O roteiro reutiliza a imagem local `emulador-game-boy-browser:dev`, com core já compilado e inalterado. Monta fontes atuais do frontend e o teste como somente leitura, roda com `--network none`, sem secrets, banco, volumes de dados ou portas publicadas. Todas as respostas de API são simuladas por contexto de navegador; nenhum login, fixture, bloqueio ou progresso é gravado nas contas/jogos pessoais. A instrumentação apenas observa chamadas de entrada/quadro do WASM real. Não se trata de nova validação do backend ou da restauração de cartucho; essas áreas usam suas evidências anteriores. Dependências alteradas futuramente exigem reconstruir a imagem de teste.
+
+Capturas revisadas em `.local/screenshots/player-ux-*`: celular, tela cheia horizontal e conflito de vínculos. Logs locais em `.local/player-ux/`, ignorados. Frontend local atualizado após aprovação; health retornou 200. Comparação dos IDs e timestamps de início confirmou que backend/PostgreSQL não foram recriados nem reiniciados. Sem manutenção de dados, não houve migração nem backup completo nesta etapa, conforme a política expressamente aprovada e registrada em AGENTS.md.
+
+Comparação SHA-256 confirmou preservação integral dos arquivos pendentes de segurança; decisões/histórico/evidências compartilhados apenas receberam novos registros. AGENTS.md recebeu somente a política de validação proporcional, mantendo suas instruções anteriores. Nenhum commit, push ou acesso remoto.
+
+Limitações: validação em Chromium/Docker, sem aparelhos físicos/Safari/Firefox. Tela cheia depende do suporte do navegador. Em alturas muito pequenas pode haver rolagem vertical da interface; presets convergem quando falta espaço. Escalas fracionárias usam amostragem sem suavização. Preferências não sincronizam entre navegadores/abas em tempo real; falha do storage mantém somente a escolha em memória enquanto o player está aberto.
+
+## 30/09/2026 — salvar/retomar e volume (validação proporcional)
+
+Escopo atual: contrato de metadados do player, confirmação de saída/ACK e áudio/preferências. Não foram repetidas suítes de autenticação, segurança, catálogo, migrações, backup/restauração ou matriz completa do motor; evidências anteriores dessas áreas permanecem históricas.
+
+- Tipos e build dos workspaces frontend/backend: passaram. Backend afetado somente pela consulta parametrizada de metadados individuais no manifesto; sem migração.
+- **9 cenários únicos Chromium com backend, PostgreSQL e core mGBA reais**, em banco/contas/catálogo temporários próprios: GB entre sessões/usuários; Flash128 de 131.072 bytes com sentinelas na segunda bancada, sair/reabrir e restaurar antes da execução; PUT lento com snapshot sucessor; falha de envio/retry/recarga; resposta perdida recuperada por retry e por reabertura; saída sem save; ACK inválido mantendo IndexedDB e impedindo saída; áudio real/preferências.
+- Primeira execução: 8 passaram e o caso sem save falhou porque a fixture SRAM inicializava dados no boot. Corrigido o ensaio com cartucho real que executa loop sem escrever SRAM; nova execução dos três casos novos passou. Após acrescentar verificação de beforeunload sem falso aviso, toque e fullscreen, os dois casos afetados passaram novamente.
+- Áudio: GainNode observado no AudioContext real em 0/35/36/70%, mute/desmute, pausa, fechamento de todos os contextos ao sair, reabertura silenciada, preferências v1 antigas e isolamento por conta. Slider por teclado e evento de toque real Chromium; 375px sem rolagem horizontal e tela cheia. Não houve avaliação auditiva humana.
+- **2 cenários de geometria GB/GBA** reaproveitados do player: tamanhos/proporções, responsividade e tela cheia. Usam API simulada e core real; comprovam layout da barra alterada, não persistência. O helper de saída foi atualizado para a confirmação explícita.
+- `git diff --check`: passou. Logs privados em `.local/save-volume/`: `tests.log`, `focused-final.log`, `audio-exit-final.log`, `layout.log`, builds e atualização. O primeiro log contém a falha de fixture descrita, não deve ser citado como execução integralmente aprovada.
+
+Reprodução: preparar `docker compose build test-browser`; executar `docker compose run --rm --no-deps test-browser npx playwright test player.spec.mjs --grep 'GB: motor real|Flash1M|PUT lento|falha ao salvar|resposta perdida|saída sem save|ACK inválido|volume real'`. A preparação/criação da base é exclusiva do ensaio, sem fixtures ou logins no banco ativo. Para geometria, executar somente `player-ux.spec.mjs --grep 'tamanhos, proporção'` na imagem de navegador com rede desabilitada.
+
+Diagnóstico: o código já aguardava flush e restaurava bytes antes do primeiro frame. Identificadas comunicação insuficiente na saída sem gravação e validação incompleta de versão/data do ACK; não foi comprovada perda de progresso no relato. Consulta local somente de leitura encontrou zero registros em `game_saves`, sem exposição de conteúdo/identidades. Isso não permite reconstruir o ocorrido nem saber se houve SAVE no jogo. O IndexedDB do navegador pessoal não estava acessível; somente recuperação sintética foi inspecionada/testada. Bytes remotos não certificam uma partida válida.
+
+Atualização local limitada a frontend/backend, sem migração ou manutenção de dados. Comparação privada antes/depois confirmou contas, sessões, catálogo e saves idênticos; container PostgreSQL preservado (mesmos ID e horário de início). A comparação estrita incluindo reservas falhou: a única reserva ativa mudou durante o intervalo, compatível com heartbeat do navegador em uso, sem comprovação de quais campos mudaram pelo snapshot agregado. Não se afirma identidade das reservas. Health local respondeu `{"status":"ok"}`. Nenhum commit/push/servidor remoto.
+
+## 30/09/2026 — reserva após Ctrl+R (validação focada)
+
+Causa reproduzida: reload real destrói o emulador, mas a liberação assíncrona não é garantida; a reserva persistida ainda válida rejeita outra aquisição. Isso não demonstra perda de save. Mantidos TTL de 120 s/heartbeat de 30 s; transferência agora exige confirmação e geração observada. A alteração não requer migração PostgreSQL/IndexedDB, limpeza de reservas ativas ou manutenção de dados pessoais.
+
+Resultados atuais:
+
+- **6 testes API/PostgreSQL reais passaram**: aquisição concorrente exclusiva, isolamento de saves por usuário/jogo, expiração com rejeição de dono antigo e preservação do save, reinício da aplicação, duas transferências da mesma geração com um vencedor, e save/renew/DELETE antigos já em voo enquanto a transferência aguardava trava real do PostgreSQL. Os novos testes também verificam CSRF, jogo inativo, geração de outra conta/jogo e token antigo incapaz de renovar/liberar a reserva vencedora. Sem mocks para essas garantias.
+- **8 cenários únicos Chromium com API/PostgreSQL/core reais passaram**. Primeira execução: sete passaram (duas abas sem transferência automática; snapshot corrompido preservando IndexedDB; resposta perdida com sucessor por retry e reabertura; reload real Flash128 com takeover/restauração; fechamento e expiração com Tentar novamente; duas abas com pendência antiga isolada sem apagar a nova). Execução complementar: três passaram, cobrindo novamente reload com resposta perdida da transferência, pendências/pageshow e acrescentando aquisição atrasada que não toma a recuperação da nova aba. Expiração simulada avançando apenas a data no banco exclusivo do ensaio, sem espera real de dois minutos.
+- O retorno `pageshow.persisted` foi exercitado por evento no navegador com backend real; não se afirma cobertura de todos os critérios internos de bfcache dos navegadores. Reload e fechamento foram reais. Flash128 sintético restaurou progresso/checksum confirmado antes da execução; nenhum teste utilizou FireRed ou dados pessoais.
+- Tipos/build de frontend e backend passaram; imagens locais de ambos construídas. `git diff --check` passou. Não repetidas suítes completas de autenticação/segurança/catálogo/temas/áudio/backup ou matriz do motor. Foram selecionados regressões de respostas perdidas e integridade porque o armazenamento de recuperação passou a verificar proprietário, além da revisão. Evidências anteriores das demais áreas permanecem históricas.
+
+Comandos de seleção (após `docker compose build test-browser`):
+
+```sh
+docker compose run --rm --no-deps test-browser node --test --test-name-pattern='takeover|lease exclusiva|lease expirada|save e lease persistem|isola saves por' tests/play.integration.test.mjs
+docker compose run --rm --no-deps test-browser npx playwright test player.spec.mjs --grep 'lease:|duas abas do mesmo|resposta perdida|save corrompido'
+```
+
+Ensaios criam e removem somente bancos/arquivos próprios; não inserem fixtures nem fazem login/bloqueio no banco ativo. Logs privados: `.local/lease-recovery/api.log`, `browser.log`, `browser-final.log`, builds e atualização. Os casos finais usaram bind mounts somente de leitura do frontend/teste atualizado na imagem de navegador já preparada.
+
+Limites: a aba remota detecta revogação na próxima operação ou heartbeat; rede ausente/suspensão pode atrasar a pausa visual, sem permitir escrita com token antigo. Fechamento abrupto não garante captura final. Pendência isolada nunca é mesclada automaticamente, e storage indisponível não permite alegar recuperação durável. Abas com código anterior à atualização precisam recarregar para receber a nova interface. Nenhum commit/push ou acesso remoto.
+
+Aplicação local concluída com `docker compose up -d --no-deps backend frontend`. Health retornou `{"status":"ok"}`. Comparação privada antes/depois confirmou contas, sessões, catálogo, saves e identidade das reservas idênticos (somente `expires_at` das reservas foi excluído por ser renovável pelo navegador ativo). Container PostgreSQL manteve ID e horário de início. Não houve migração, reset de reserva, escrita de progresso pessoal ou alteração dos arquivos de ROM/capa; arquivos de segurança, volume e AGENTS.md fora do escopo permaneceram iguais ao baseline desta tarefa.
+
+## 30/09/2026 — velocidade de emulação (validação proporcional)
+
+Mudança somente de frontend: seletor/preferências e agendador/áudio do adaptador TypeScript. Core, backend, HTTP, saves, recuperação e banco não foram alterados. Não havia pendência conhecida na entrega anterior de recuperação de reserva. Evidências anteriores de autenticação, segurança, catálogo, temas, volume e takeover permanecem históricas, sem repetição das suítes por rotina.
+
+**9 cenários únicos aprovados**, selecionados pelo impacto direto:
+
+- **2 cenários core GB/GBA** com WASM real e ROMs próprias, controlando timestamps RAF e custo sintético medido pelo orçamento do agendador. Cada cenário verificou os cinco multiplicadores em 60/120/144 Hz (30 combinações no total), comparando contador real de frames com frequência nativa × tempo × velocidade, sem benchmark do PC. Cobriram limite de 12 frames, orçamento de 8 ms com frame sintético de custo 9 ms, descarte de dívida, pausa, troca enquanto pausado/em execução, retorno 1×, suspensão longa, documento oculto, inputs alterando SRAM, uma cadeia RAF e encerramento.
+- **1 cenário de áudio** com AudioContext/GainNode/AudioWorklet reais: ativação por gesto CDP no botão, ganho 36%/22%/0, suspensão e nenhum PCM enviado em 10×, limpeza ao retornar, mute/pausa preservados, um contexto fechado no destroy. Uma execução adicional aprovou trocas de velocidade concorrentes e rápidas, retornando a contexto ativo e uma única cadeia RAF. A lógica do processador existente também recebeu PCM sintético não silencioso em teste controlado e produziu zeros após clear. Não houve avaliação auditiva humana; fixtures de jogo silenciosas não comprovam qualidade sonora.
+- **4 cenários de interface**: dois de geometria GB/GBA reaproveitados porque o seletor/aviso alteram a barra (proporção, mobile e fullscreen); um de preferência v1 antiga sem velocidade preservando teclas/tamanho/botões/volume, persistência, isolamento, velocidade inválida e storage indisponível; um de pausa/modal/perda de reserva impedindo avanço mesmo ao alterar velocidade. Instrumentação confirmou somente os timers do player de **2.000/30.000 ms**, sem novos registros após trocas rápidas. API simulada nesses testes é evidência de UI/agendamento, não prova de persistência.
+- **2 smokes com PostgreSQL/API/core reais**, em banco/contas/arquivos isolados: GB e Flash128 em 10×/3×, input, captura mais recente ao pausar/sair, checksum/versão, token de reserva inalterado ao ajustar velocidade, reabertura com progresso e preferência restaurados, retorno 1×. Nenhuma ROM/save/conta pessoal foi usada.
+
+Tipos/build do frontend e `git diff --check` passaram. A imagem de testes existente forneceu o mesmo core já compilado; fontes do frontend/testes foram montadas somente para leitura. Testes de core/UI rodaram com `--network none`; os dois smokes criaram/removeram somente banco e arquivos próprios. Não houve migração, build/testes do backend, backup completo ou reinício de banco/backend.
+
+A primeira execução de UI teve 3 aprovados e 1 falha no ensaio: a contagem incluía o timer geral de sessão de 30 s. A medição passou a começar antes de iniciar o player, depois do timer da aplicação, e o caso passou. Na revisão do teste de áudio, o clique CDP usava coordenadas fixas fora do botão; corrigido para seu retângulo real, o gesto confiável e a limpeza de fila passaram. Não foram encontradas falhas funcionais nesses dois ajustes de teste.
+
+Logs privados em `.local/speed/`: `core-tests.log`, `ui-tests.log`, `persistence-tests.log`, `final-tests.log`, `audio-final.log`, `audio-gesture-final.log`, `audio-rapid.log` e `frontend-build.log`. Os logs intermediários contêm as falhas de ensaio descritas e não devem ser apresentados como execuções integralmente aprovadas.
+
+Seleção reproduzível na imagem `emulador-game-boy-browser:dev`, com frontend/testes atuais montados:
+
+```sh
+npx playwright test player-speed.spec.mjs
+npx playwright test player-ux.spec.mjs --grep 'velocidade:|tamanhos, proporção'
+# Em docker compose run --rm --no-deps test-browser, com banco isolado criado pelo próprio spec:
+npx playwright test player.spec.mjs --grep 'velocidade:'
+```
+
+Limites: 10× é alvo, condicionado ao hardware. O orçamento é verificado entre frames, não preempta um frame individual. Acima de 1× o áudio fica temporariamente silenciado; retornar respeita mute/volume e exigências de gesto. Captura nativa/sincronização continuam sujeitas às limitações já documentadas de fechamento abrupto e escrita interna do jogo, sem save state.
+
+Atualização concluída somente com `docker compose up -d --no-deps frontend`. Health local respondeu `{"status":"ok"}`. IDs e horários de início de backend/PostgreSQL antes/depois foram idênticos (`.local/speed/services-before.txt` e `services-after.txt`). Comparação de arquivos com o baseline privado confirmou preservação das alterações anteriores de backend/segurança/recuperação de sessão e AGENTS.md; sem commit/push ou acesso remoto.
+
+
+## 30/09/2026 — estados e administração de saves
+
+Validação focada na ampliação nova e impactos diretos. Nenhuma suíte completa de login, catálogo, temas, áudio ou matriz de cartuchos foi repetida. Evidências anteriores dessas áreas permanecem históricas. O uso de PostgreSQL/core reais e backup foi necessário porque esta entrega adiciona persistência e exclusão administrativa. Dados de ensaio ficaram em bases/arquivos exclusivos, nunca em jogos/contas pessoais.
+
+Resultados executados:
+
+- `states-core.spec.mjs`: **3 passaram**, ABI real GB/GBA SRAM/GBA Flash128, captura no frame 30, alteração até frame 50 e retorno exato ao frame 30, cartucho íntegro e execução seguinte. Medidas: 71.680/397.312/397.312 bytes de state e 8.192/32.768/131.072 bytes de cartucho. Nenhum shim/core alterado.
+- `node --test --test-name-pattern='states:' tests/play.integration.test.mjs`: **2 passaram**, com PostgreSQL isolado. Slots/CAS/retry idempotente, escrita concorrente com um único vencedor, limites de tamanho e quotas de usuário/global, CSRF, isolamento, MASTER sem load alheio, geração de lease/takeover, reset nativo e API reiniciada. Payloads deste teste de contrato são sintéticos; a validade de CPU/RAM é comprovada nos testes reais separados.
+- Após revisão de concorrência administrativa, repetido somente `states: slots`: **1 passou**, incluindo dono com trava de usuário em andamento e resposta 409 imediata. Confirmação de exclusão antiga também não apaga novo nativo com versão 1 após reset.
+- `playwright test player.spec.mjs --grep 'states:'`: dois cenários de estado GB/Flash128 **passaram**. Save rápido/manual, cancelar substituição, load real, frame exato, cartucho restaurado, payload com checksum incorreto e cabeçalho inválido com checksum correto recusados sem destruir instância anterior, ACK de nativo perdido após commit, retry, saída/reabertura, preferências de velocidade/volume preservadas e exclusão de slot sem alterar nativo.
+- Acrescentado e executado separadamente `--grep 'states: toque'`: **1 passou**, Chromium com toque/viewport 390×844 e fullscreen, sem overflow horizontal, quick save, Meus saves separado da administração MASTER, dono identificado na confirmação, recusa de excluir nativo com reserva ativa, exclusão após saída e pendência antiga bloqueada/preservada ao reabrir.
+- `node scripts/test-states-backup.mjs`: **passou**, core real GB/Flash128 + API/PostgreSQL próprios; quatro states e dois nativos persistem após reinício da API e carregam frame 30 antes de avançar a 31. Backup v4 restaurado em PostgreSQL temporário sem rede, payloads/metadados/checksums conferidos. A primeira execução teve apenas uma assertion de texto do relatório incorreta; corrigida e ensaio repetido com sucesso, sem falha de restauração.
+- Tipos e build de backend/frontend passaram. Após ajuste de navegação, tipos frontend e build da imagem frontend passaram; após ajuste de concorrência, build/tipos backend e teste específico passaram. `git diff --check` sem problemas.
+
+Logs privados em `.local/states/`: `spike.log`, `api.log`, `api-final.log`, `browser.log`, `management-ui.log`, `backup-test.log`, `types.log`, `build.log` e logs das imagens. Baseline de hashes separa as mudanças desta tarefa das anteriores pendentes. Ajustada somente a expectativa de seis migrações no teste histórico de migração; sua suíte não foi repetida por rotina.
+
+Limites: snapshot depende de ROM e WASM exatos; há maior uso transitório de memória durante validação do core candidato. Sem importação/exportação nem histórico de revisões substituídas. State sem memória nativa ainda identificada é recusado se já existir cartucho confirmado mais novo, evitando mistura. Fechar abruptamente antes de confirmar upload não garante o novo state. Áudio antigo é descartado e preferências preservadas, mas não houve avaliação auditiva humana. Chromium com toque não substitui aparelhos físicos ou outros navegadores. Contrato completo em [saves](saves.md).
+
+Aplicação local concluída: backup anterior v4 sem states, restauração isolada com cinco migrações; aplicada somente a migração 006; recriados somente backend/frontend. PostgreSQL/volume permaneceram os mesmos. Comparação de contagens/fingerprints de contas, catálogo e saves nativos antes/depois foi idêntica. Backup final v4 restaurado com seis migrações, arquivos/checksums preservados e nenhum state pessoal criado pelo ensaio. Health via frontend retornou `status: ok`; somente `127.0.0.1:5173` publicado. Logs privados `pre-backup.log`, `pre-restore.log`, `migrate-active.log`, `update-services.log`, `before.json`, `after.json`, `final-backup.log` e `final-restore.log`. Sem commit/push; alterações anteriores preservadas.
+
+## 30/09/2026 — fechamento documental e revisão para commit
+
+Revisados guia passo a passo, contratos, README, operação e continuidade contra a implementação atual: um nativo e quatro states, exclusão/administração, reserva após refresh, recuperação pendente e preferências. Removidas contradições vigentes e duplicações de procedimentos; registros de etapas anteriores permanecem históricos. Comandos/variáveis conferidos em package.json, Dockerfile, Compose, exemplo público de configuração e scripts, sem executar manutenção.
+
+Validação desta etapa: links locais e âncoras conferidos, revisão de versões/comandos/coerência, conteúdo elegível e staged inspecionado e `git diff --check`. Nenhum build ou teste da aplicação foi repetido; resultados das entregas anteriores foram reutilizados com seu escopo original. Não houve alteração funcional nem operação de banco/serviços. Arquivos privados, assets gerados, dependências e dados pessoais ficam fora do commit.

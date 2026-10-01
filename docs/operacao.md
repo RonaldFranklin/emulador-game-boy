@@ -64,90 +64,35 @@ O comando pergunta nome e senha duas vezes, sem eco da senha, recusa argumentos 
 
 Se mudar a porta, atualize também `APP_ORIGIN` e recrie os containers. Este Compose usa HTTP local e cookie sem `Secure`; `HttpOnly` e `SameSite=Strict` estão ativos. **Não é uma configuração de produção ou acesso pela rede.**
 
+## Atualizar e diagnosticar
+
+Use `docker compose ps -a` e `docker compose logs --tail=100 backend frontend migrate bootstrap` para diagnóstico, sem imprimir configuração/segredos. `docker compose stop` e `docker compose start` param/retomam sem remover dados. Os fontes não são montados nos serviços: alterações executáveis exigem nova imagem.
+
+Para **somente frontend**, após validar o impacto:
+
 ```bash
-# Estado e diagnóstico sem exibir segredos
-docker compose ps -a
-docker compose logs --tail=100 backend frontend migrate bootstrap
-
-# Antes de atualizar código/migrações de uma instalação existente
-npm run backup
-# Verifique a pasta impressa: npm run restore:verify -- .local/backups/PASTA
-docker compose up -d --build
-curl --fail --retry 20 --retry-all-errors --retry-delay 1 http://127.0.0.1:5173/api/health
-
-# Atualizar somente a interface, mantendo backend e banco em execução
-docker build --target frontend --tag emulador-game-boy-frontend:dev .
+docker compose build frontend
 docker compose up -d --no-deps frontend
-
-# Reaplicar o verificador de migrações (idempotente)
-docker compose run --rm migrate
-
-# Parar e voltar sem remover dados
-docker compose stop
-docker compose start
 ```
 
-Os fontes não são montados nos containers; edições precisam de novo build. O frontend usa o servidor de desenvolvimento Vite neste Compose. `npm run build` também gera os artefatos de frontend e backend, mas não há implantação desses artefatos nesta entrega.
-
-A migração `002-catalog.sql` adiciona o catálogo, `003-catalog-consoles.sql` inclui o console e `004-play-saves.sql` cria saves/reservas sem alterar identidades existentes. Jogos existentes são marcados como GB, sem renomear arquivos, converter bytes ou alterar UUIDs/hashes/contas/sessões. Para atualizar uma instalação da etapa de autenticação, execute primeiro o backup acima: o comando reconhece o banco legado sem catálogo. Guarde a pasta e valide a restauração antes de executar `docker compose up -d --build`.
-
-Para atualizar uma instalação com catálogo para a versão com emulação/saves, depois do backup/restauração verificados, use a sequência abaixo, avançando somente se cada comando terminar com sucesso. A execução desta revisão, que inclui o bootstrap, é registrada separadamente em [validação](validacao.md#bootstrap-e-documentação-pública--30092026). Há uma breve indisponibilidade da API durante a migração; isso evita gravações pela versão antiga enquanto o esquema muda. O PostgreSQL permanece iniciado.
+Não há motivo para migrar, reiniciar banco ou fazer backup completo numa mudança só de interface/documentação. Para **backend com migrações ou manutenção de dados**, primeiro encerre os jogos com sincronização confirmada, confira contexto/containers/volumes e siga, avançando somente após sucesso:
 
 ```bash
-docker build --target backend --tag emulador-game-boy-backend:dev .
-docker build --target frontend --tag emulador-game-boy-frontend:dev .
+npm run backup
+# Substitua PASTA pelo destino impresso:
+npm run restore:verify -- .local/backups/PASTA
+docker compose build backend frontend
 docker compose stop backend
 docker compose run --rm --no-deps migrate
-docker compose run --rm --no-deps bootstrap
 docker compose up -d --no-deps backend frontend
 curl --fail --retry 20 --retry-all-errors --retry-delay 1 http://127.0.0.1:5173/api/health
 ```
 
-Se a migração falhar, mantenha a API parada e investigue o erro; não tente remover checksums, tabelas ou volumes. Não houve alteração de segredos ou necessidade de recriar contas nesta atualização.
+O PostgreSQL permanece iniciado. Reconstrua/recrie apenas serviços afetados; a sequência acima atende mudanças de contrato entre backend/frontend. Após manutenção de dados, faça e verifique o backup final. Se migração falhar, mantenha a API parada e investigue; não remova checksums/tabelas/volumes. Em banco ainda sem MASTER, conclua o [bootstrap](#primeiro-master-e-segredos-locais) antes de liberar a API.
 
-As migrações em `backend/migrations/` têm transação, checksum e trava no banco. Nunca edite uma migração já aplicada: adicione uma nova. Falha de migração impede a inicialização. Não há rollback automático destrutivo.
+Migrações em `backend/migrations/` são incrementais, transacionais e verificadas por checksum. Nunca edite uma já aplicada. A 004 criou nativos/reservas; a 005 ampliou rate limiting persistente; a 006 adicionou states e marcadores de reinício, sem converter nativos existentes. Não há rollback destrutivo automático.
 
-## Testes
-
-```bash
-npm run prepare:emulator # compila e extrai assets locais; Docker necessário
-npm run typecheck
-npm run build
-npm audit --audit-level=low
-docker compose build backend
-docker compose run --rm test
-docker compose build frontend
-npm run test:first-boot
-npm run test:first-boot -- --configured-first
-docker compose build test-browser
-npm run test:browser
-npm run test:catalog-operations
-# Opcional: ensaio anterior de autenticação, com reinício do PostgreSQL:
-npm run test:operations
-```
-
-Os testes de API criam e removem **somente suas próprias bases e pastas aleatórias**; não limpam o banco de desenvolvimento. Usam credencial administrativa apenas no serviço `test`. A aplicação usa um papel PostgreSQL sem superusuário e sem criação de bancos.
-
-`test:first-boot` executa `npm ci` e setup em uma cópia temporária, depois sobe as imagens recém-compiladas com projeto Compose, porta loopback, banco e volumes exclusivos. Verifica bloqueio sem credenciais, criação/login MASTER com `$` literal, reinício, ausência/alteração da configuração sem reset e ausência das credenciais em logs/configuração/frontend. Remove somente seus próprios containers/volumes e os segredos temporários; preserva evidência resumida em `.local/firstboot-*/evidence.json`. Não reinicia nem modifica o banco ativo. Com `--configured-first`, segue o primeiro `up` já configurado; sem a opção, testa a recusa inicial e a correção da configuração.
-
-O teste de navegador executa Chromium em container sem portas publicadas, com bases e pastas de arquivos próprias; valida bootstrap real em TTY, login, administração, senha temporária, perfis, temas e catálogo real (upload, edição, disponibilidade e biblioteca móvel), além do player real GB/GBA, SRAM/Flash, controles, isolamento, duas abas e falhas de rede. A API/core do player não são simulados; testes de tema usam API simulada, e falhas de rede/áudio são injetadas explicitamente. ROMs e capas sintéticas são geradas durante os testes, sem baixar jogos reais ou inserir fixtures na biblioteca ativa. Capturas sem campos de senha preenchidos são copiadas para `.local/screenshots/`, sem exigir que seu UID coincida com o do container.
-
-Para validar apenas os temas, sem iniciar ou acessar backend/banco:
-
-```bash
-npm run typecheck --workspace frontend
-npm run build --workspace frontend
-docker compose build test-browser # prepara a imagem; não inicia serviços
-npm run test:theme
-```
-
-`test:theme` reutiliza essa imagem e monta os fontes atuais da interface e o teste como somente leitura. Executa Chromium e Vite com API simulada, sem rede externa, portas publicadas, secrets ou volumes de dados. Cobre preferência do sistema, aplicação antes do React, persistência/reload/logout, storage indisponível, teclado e os dois perfis/temas em desktop e celular. Capturas ficam em `.local/screenshots/theme-*.png`; o container temporário é removido ao terminar. Alterações nas dependências exigem reconstruir a imagem do navegador antes de repetir essa suíte.
-
-`test:catalog-operations` usa banco, containers e volumes novos exclusivos do ensaio. Cadastra arquivos sintéticos GB e GBA e saves nativos dos dois tipos, reinicia sua API, faz backup completo, testa restauração sem rede, rejeição de arquivo adulterado e recuperação em outro banco/volume com API real. Remove somente seus recursos temporários e preserva o backup de evidência. Não reinicia o PostgreSQL ativo.
-
-**`test:operations` reinicia o PostgreSQL deste projeto** para comprovar persistência de conta e sessão, e valida backup/restauração com contas fictícias. Execute quando puder interromper brevemente o uso local e não execute outras suítes ao mesmo tempo. Ele usa base e API temporárias, com uma porta aleatória publicada apenas em loopback; não altera contas do banco ativo. O dump de teste é preservado em `.local/backups/`.
-
-Veja os resultados efetivamente obtidos em [validação](validacao.md).
+Testes e seleção proporcional estão em [desenvolvimento](desenvolvimento.md#validação-por-impacto); resultados efetivamente executados em [validação](validacao.md).
 
 ## Persistência, backup e restauração
 
@@ -165,7 +110,7 @@ O backup é uma **pasta completa** com `database.dump`, `files/roms/`, `files/co
 
 A pasta só recebe o manifesto final após sucesso. Backup interrompido/incompleto não pode ser restaurado. Se houver arquivo inesperado, ausente ou divergente, o comando falha: preserve a origem e investigue; não apague arquivos do volume manualmente. Não execute migração, recuperação ou manutenção manual de dados/arquivos simultaneamente ao backup.
 
-`restore:verify` valida o manifesto e todos os arquivos, restaura o banco transacionalmente e copia os arquivos para um PostgreSQL temporário **sem rede, portas ou volume persistente**. Confere novamente referências do banco, console/extensão/tamanho e bytes restaurados. O manifesto v3 registra também tamanho/checksum/versão de cada save, cujos bytes ficam em `database.dump`. A restauração recalcula os checksums no banco. Manifestos v2 sem saves continuam aceitos e registram `console`; manifestos v1 anteriores são aceitos como GB e mantêm os arquivos `.gb` originais. A verificação não altera o esquema do dump: ao ativar uma recuperação antiga, o serviço `migrate` aplica as migrações pendentes, incluindo a identificação GB. Esse container é removido ao terminar; o banco/volume ativos não são alterados. Dumps legados `.dump` + `.sha256` continuam aceitos quando não contêm jogos.
+`restore:verify` valida o manifesto e todos os arquivos, restaura o banco transacionalmente e copia os arquivos para um PostgreSQL temporário **sem rede, portas ou volume persistente**. Confere novamente referências do banco, console/extensão/tamanho e bytes restaurados. O manifesto v4 registra tamanho/checksum/versão de nativos e estados, identidade de ROM/core e marcadores de reinício; bytes, tombstones de slots e metadados ficam em `database.dump`. Manifestos v3 continuam aceitos com saves nativos e sem states. A restauração recalcula os checksums no banco. Manifestos v2 sem saves continuam aceitos e registram `console`; manifestos v1 anteriores são aceitos como GB e mantêm os arquivos `.gb` originais. A verificação não altera o esquema do dump: ao ativar uma recuperação antiga, o serviço `migrate` aplica as migrações pendentes, incluindo a identificação GB. Esse container é removido ao terminar; o banco/volume ativos não são alterados. Dumps legados `.dump` + `.sha256` continuam aceitos quando não contêm jogos.
 
 Para recuperar em **novo banco e novo volume**, preservando os atuais:
 
@@ -186,19 +131,14 @@ curl --fail --retry 20 --retry-all-errors --retry-delay 1 http://127.0.0.1:5173/
 
 Entre novamente e confira contas, catálogo e progresso dentro dos jogos. O banco e o volume anteriores continuam preservados; para voltar, restaure os dois valores anteriores no `.env` e repita a recriação. Falha de recuperação deixa o destino não ativado para diagnóstico, sem alterar `.env` ou a origem. Se restaurar em outra máquina, execute `npm ci`, `npm run setup` e `docker compose up -d database` para criar o papel da aplicação e **novos segredos locais**; copie a pasta de backup inteira por meio seguro. Não é necessário recuperar segredos antigos do banco. Restaure o backup, configure os dois destinos impressos e só então inicie os serviços restantes; o master recuperado será preservado pelo bootstrap.
 
-Política desta fase local: backup manual antes de migrações/mudanças de dados e após sessões relevantes de desenvolvimento, com restauração verificada. Pasta raiz de backups `0700`, arquivos `0600`, sem exclusão automática. Backups contêm material sensível, incluindo hashes de senhas, ROMs e saves; checksums não são criptografia nem prova de autoria. Use apenas backups de origem confiável. Agendamento, cópia externa criptografada, retenção automática e objetivos de recuperação ainda precisam ser definidos, além de um ensaio completo em outra máquina, antes de uso real.
+Política desta fase local: backup manual antes de migrações/mudanças de dados e após sessões relevantes de desenvolvimento, com restauração verificada. Pasta raiz de backups `0700`, arquivos `0600`, sem exclusão automática. Backups contêm material sensível, incluindo hashes de senhas, ROMs e saves; checksums não são criptografia nem prova de autoria. Use apenas backups de origem confiável. Agendamento, cópia externa criptografada, retenção automática e objetivos de recuperação ainda precisam ser definidos, além de um ensaio completo em outra máquina, antes de uma eventual implantação externa.
 
-## Estrutura e limites
+## Limites locais e diagnóstico de acesso
 
-```text
-backend/                 NestJS modular, CLI e migrações SQL
-frontend/                React, Vite, estilos e formulários
-docker/                  Inicialização do papel PostgreSQL
-scripts/                 Setup, backup e recuperação
-tests/                   Integração HTTP, TTY e navegador
-docs/                    Decisões, regras, desenvolvimento e evidências
-```
+Este Compose usa Vite de desenvolvimento, HTTP e loopback; não é implantação externa. Backend e banco não publicam portas. Uma eventual exposição externa exige autorização e revisão própria de HTTPS, proxy, acesso e operação.
 
-GB e GBA fazem parte deste mesmo projeto por autorização expressa; GBC exclusivo e demais consoles continuam fora. O campo `console` identifica o formato da ROM; o backend mapeia GB/GBA para adaptadores mGBA separados em código, sem persistir nome de core na identidade do jogo. O core fixado é um commit de desenvolvimento upstream; o build e os testes não garantem compatibilidade com todos os jogos ou periféricos. Celulares físicos e navegadores além de Chromium ainda precisam de validação. O catálogo não verifica compatibilidade com um core, não aceita substituição de ROM e não oferece exclusão definitiva. Não há telemetria, e-mail, recuperação pública de senha, auditoria administrativa completa ou exposição externa. O limite de IP observa o proxy Vite local e é compartilhado por seus usuários; uma implantação futura precisa revisar proxy confiável, HTTPS e política operacional.
+`TRUSTED_PROXY_HOST=frontend` é definido no backend pelo Compose. Vite sanitiza encaminhamento e o backend confere o peer; health não depende do proxy/DNS para permitir primeiro boot. Falha nessa validação nas demais rotas retorna 503. NAT/Docker Desktop podem compartilhar IPs entre clientes. Bloqueios de login persistem no PostgreSQL: não reinicie serviços nem apague registros para contorná-los. Aguarde `Retry-After`; regras em [autenticação](autenticacao.md#limitação-de-tentativas).
 
-Consulte [o índice de documentação](README.md). Nenhum jogo, save pessoal ou segredo deve ser versionado. Antes de uma publicação pública, revise documentação e histórico para retirar referências administrativas particulares. Agentes devem ler [AGENTS.md](../AGENTS.md).
+O core fixado não garante todo cartucho/periférico. States dependem da ROM/core exatos; preserve as fontes/compilação correspondentes ao planejar recuperação, conforme [saves](saves.md) e [fontes do motor](fontes-emulador.md). O backup de dados não contém automaticamente os binários do emulador. Pendências exclusivas do navegador não entram no backup do servidor.
+
+Não há coleta automática de arquivos retidos, recuperação pública da senha de master nem auditoria administrativa completa. Limitações testadas estão em [validação](validacao.md); orientações para agentes em [AGENTS.md](../AGENTS.md). Nenhuma operação autoriza publicar segredos, ROMs ou saves pessoais.

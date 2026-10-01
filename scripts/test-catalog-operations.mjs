@@ -144,7 +144,7 @@ try {
     "import {writeFile} from 'node:fs/promises'; import {randomUUID} from 'node:crypto'; await writeFile('/data/catalog/covers/'+randomUUID()+'.png', Buffer.alloc(0), {flag:'wx',mode:0o600});"]);
   await mkdir('.local/backups', { recursive: true, mode: 0o700 });
   const manifest = await createCatalogueBackup({ backendContainer: source, databaseContainer, outputPath: bundle });
-  assert.equal(manifest.version, 3);
+  assert.equal(manifest.version, 4);
   assert.equal(manifest.saves.length,2);
   assert.equal(manifest.games.length, 2);
   assert.deepEqual(manifest.games.map(game=>game.console).sort(), ['GB', 'GBA']);

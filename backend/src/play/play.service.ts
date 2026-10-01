@@ -19,8 +19,12 @@ export class PlayService {
   constructor(private readonly sessions: SessionService, private readonly storage: CatalogStorageService) {}
 
   manifest(id: string, identity: SessionIdentity) {
-    return this.withGame(id, identity, false, async (_client, game) => ({
+    return this.withGame(id, identity, false, async (client, game) => ({
       game: { id: game.id, name: game.name, console: game.console },
+      save: (await client.query<{ version: number; updatedAt: Date }>(
+        'SELECT version, updated_at AS "updatedAt" FROM game_saves WHERE user_id=$1 AND game_id=$2',
+        [identity.user.id, id],
+      )).rows[0] ?? null,
       core: CORE_FOR_CONSOLE[game.console],
       romUrl: `/api/play/${game.id}/rom`,
       maxSaveBytes: MAX_SAVE_BYTES,
@@ -39,15 +43,34 @@ export class PlayService {
     });
   }
 
+  reservation(id: string, identity: SessionIdentity) {
+    return this.withGame(id, identity, false, async client => {
+      const row = (await client.query<LeaseRow>(
+        `SELECT l.* FROM play_leases l JOIN sessions s ON s.token_hash=l.session_token_hash
+         WHERE l.user_id=$1 AND l.game_id=$2 AND l.expires_at > clock_timestamp()
+           AND s.expires_at > clock_timestamp()`, [identity.user.id, id],
+      )).rows[0];
+      // Observation only: never expose the token that authorizes writing.
+      return { reservation: row ? { generation: hashToken(row.token_hash), expiresAt: row.expires_at.toISOString() } : null };
+    });
+  }
+
   acquire(id: string, identity: SessionIdentity, body: unknown) {
-    acquireInput(body);
+    const expected = acquireInput(body);
     return this.withGame(id, identity, true, async (client) => {
-      await client.query('DELETE FROM play_leases WHERE expires_at <= clock_timestamp()');
-      const current = await client.query(
-        `SELECT 1 FROM play_leases l JOIN sessions s ON s.token_hash=l.session_token_hash
-         WHERE l.user_id=$1 AND l.game_id=$2 AND s.expires_at > clock_timestamp()`, [identity.user.id, id],
-      );
-      if (current.rowCount) throw new ConflictException('Este jogo já está aberto nesta conta. Saia da outra aba ou aguarde a sessão de jogo expirar.');
+      const current = (await client.query<LeaseRow>(
+        `SELECT l.*, l.expires_at > clock_timestamp() AND s.expires_at > clock_timestamp() AS valid
+         FROM play_leases l JOIN sessions s ON s.token_hash=l.session_token_hash
+         WHERE l.user_id=$1 AND l.game_id=$2 FOR UPDATE OF l`, [identity.user.id, id],
+      )).rows[0];
+      // Compare the observed generation under the same transaction/locks as
+      // save and renew. A second takeover of that generation must lose.
+      if (expected !== undefined && (!current || hashToken(current.token_hash) !== expected)) {
+        throw new ConflictException('A reserva mudou desde a confirmação. Confira novamente antes de assumir.');
+      }
+      if (current?.valid && expected === undefined) {
+        throw new ConflictException('Existe uma reserva de jogo ativa. Ela pode ser de outra aba ou de uma aba fechada/recarregada. Aguarde ou escolha encerrar a sessão anterior.');
+      }
       const token = randomUUID();
       const lease = await client.query<{ expires_at: Date }>(
         `INSERT INTO play_leases (user_id,game_id,token_hash,session_token_hash,expires_at)
@@ -56,12 +79,13 @@ export class PlayService {
            session_token_hash=excluded.session_token_hash,expires_at=excluded.expires_at,created_at=clock_timestamp()
          RETURNING expires_at`, [identity.user.id, id, hashToken(token), identity.tokenHash, LEASE_TTL_SECONDS],
       );
+      const epoch = (await client.query<{epoch:string}>('SELECT epoch FROM save_resets WHERE user_id=$1 AND game_id=$2', [identity.user.id,id])).rows[0]?.epoch ?? null;
       const saved = (await client.query<SaveRow>('SELECT * FROM game_saves WHERE user_id=$1 AND game_id=$2', [identity.user.id, id])).rows[0];
       // Read save and acquire lease atomically. A new boot must never race an old writer.
       return {
         leaseId: token, expiresAt: lease.rows[0]!.expires_at.toISOString(), renewAfterSeconds: LEASE_RENEW_SECONDS,
-        save: saved ? { ...saveMetadata(saved), dataBase64: saved.data.toString('base64') }
-          : { dataBase64: null, sha256: null, version: 0, updatedAt: null },
+        save: saved ? { epoch, ...saveMetadata(saved), dataBase64: saved.data.toString('base64') }
+          : { epoch, dataBase64: null, sha256: null, version: 0, updatedAt: null },
       };
     });
   }
@@ -93,6 +117,8 @@ export class PlayService {
     const input = saveInput(body);
     return this.withGame(id, identity, true, async (client) => {
       await this.requireLease(client, id, identity, input.leaseId);
+      const epoch = (await client.query<{epoch:string}>('SELECT epoch FROM save_resets WHERE user_id=$1 AND game_id=$2',[identity.user.id,id])).rows[0]?.epoch ?? null;
+      if ((input.epoch ?? null) !== epoch) throw new ConflictException('O progresso nativo foi reiniciado. A pendência anterior foi preservada e não pode ser enviada automaticamente.');
       const data = decodeSave(input.dataBase64);
       const sha256 = createHash('sha256').update(data).digest('hex');
       if (input.sha256 !== undefined && input.sha256 !== sha256) throw new BadRequestException('O checksum não corresponde ao progresso enviado.');
@@ -123,17 +149,17 @@ export class PlayService {
     });
   }
 
-  private async requireLease(client: PoolClient, id: string, identity: SessionIdentity, token: string) {
+  async requireLease(client: PoolClient, id: string, identity: SessionIdentity, token: string) {
     const lease = (await client.query<LeaseRow>(
       `SELECT *,expires_at > clock_timestamp() AS valid FROM play_leases
        WHERE user_id=$1 AND game_id=$2 FOR UPDATE`, [identity.user.id, id],
     )).rows[0];
     if (!lease?.valid || lease.token_hash !== hashToken(token) || lease.session_token_hash !== identity.tokenHash) {
-      throw new ConflictException('A sessão de jogo expirou ou pertence a outra aba. Reabra o jogo para recuperar o progresso confirmado.');
+      throw new ConflictException('Esta aba perdeu a reserva de jogo: ela expirou ou foi assumida em outra aba. O jogo foi pausado; o save confirmado permanece protegido.');
     }
   }
 
-  private withGame<T>(id: string, identity: SessionIdentity, mutation: boolean, work: (client: PoolClient, game: GameRow) => Promise<T>): Promise<T> {
+  withGame<T>(id: string, identity: SessionIdentity, mutation: boolean, work: (client: PoolClient, game: GameRow) => Promise<T>): Promise<T> {
     return this.sessions.withActor(identity, {}, async (client) => {
       if (mutation) await client.query('SELECT pg_advisory_xact_lock($1)', [CATALOG_LOCK_KEY]);
       // Both roles can only play active games. The share lock serializes deactivation.

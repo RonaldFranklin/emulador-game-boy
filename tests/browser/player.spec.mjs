@@ -73,7 +73,9 @@ test.beforeAll(async () => {
   const session = await response.json();
   const cookie = response.headers.get('set-cookie').split(';', 1)[0];
   masterSession = { cookie, csrfToken: session.csrfToken };
-  for (const [key, console, bytes] of [['GB', 'GB', playableGbRom()], ['GBA', 'GBA', playableGbaRom()], ['FLASH1M', 'GBA', playableGbaFlashRom()]]) {
+  const idleRom = playableGbRom();
+  idleRom.set([0x18, 0xfe], 0x150); // JR to self: real cartridge never writes SRAM.
+  for (const [key, console, bytes] of [['NONE', 'GB', idleRom], ['GB', 'GB', playableGbRom()], ['GBA', 'GBA', playableGbaRom()], ['FLASH1M', 'GBA', playableGbaFlashRom()]]) {
     const body = new FormData();
     body.set('name', `Programa próprio ${key}`);
     body.set('active', 'true');
@@ -114,8 +116,8 @@ async function login(page, user) {
 
 async function openGame(page, gameConsole) {
   await page.getByRole('article', { name: games[gameConsole].name, exact: true }).getByRole('button', { name: 'Jogar', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Iniciar jogo', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Iniciar jogo', exact: true }).click();
+  await expect(page.getByRole('button', { name: /^(Iniciar|Continuar) jogo$/ })).toBeVisible();
+  await page.getByRole('button', { name: /^(Iniciar|Continuar) jogo$/ }).click();
   await expect(page.getByRole('button', { name: 'Pausar', exact: true })).toBeVisible();
 }
 
@@ -160,6 +162,7 @@ async function expectSaved(user, gameConsole, value) {
 
 async function leaveGame(page) {
   await page.getByRole('button', { name: 'Salvar e voltar', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: /^(Voltar à biblioteca|Sair sem save confirmado)$/ }).click();
   await expect(page.getByRole('heading', { name: 'Biblioteca', exact: true })).toBeVisible();
 }
 
@@ -348,7 +351,7 @@ test('renova a lease durante carga lenta da ROM e encerra os timers ao sair', as
   const user = await createUser();
   await login(page, user);
   await page.getByRole('article', { name: games.GBA.name, exact: true }).getByRole('button', { name: 'Jogar', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Iniciar jogo', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: /^(Iniciar|Continuar) jogo$/ })).toBeVisible();
   await page.clock.install();
   let notifyLoading;
   let releaseRom;
@@ -363,7 +366,7 @@ test('renova a lease durante carga lenta da ROM e encerra os timers ao sair', as
   const url = `**/api/play/${games.GBA.id}/rom`;
   await page.route(url, async (route) => { notifyLoading(); await released; await route.continue(); });
   try {
-    await page.getByRole('button', { name: 'Iniciar jogo', exact: true }).click();
+    await page.getByRole('button', { name: /^(Iniciar|Continuar) jogo$/ }).click();
     await loading;
     const renewed = page.waitForResponse((response) => response.url().endsWith(`/api/play/${games.GBA.id}/lease/renew`) && response.status() === 200);
     await page.clock.fastForward(31_000);
@@ -444,7 +447,7 @@ test('duas abas do mesmo usuário não executam o mesmo jogo simultaneamente', a
     await expect(second.getByRole('heading', { name: 'Biblioteca', exact: true })).toBeVisible();
     const conflict = second.waitForResponse((response) => response.url().endsWith(`/api/play/${games.GB.id}/lease`) && response.status() === 409);
     await second.getByRole('article', { name: games.GB.name, exact: true }).getByRole('button', { name: 'Jogar', exact: true }).click();
-    await second.getByRole('button', { name: 'Iniciar jogo', exact: true }).click();
+    await second.getByRole('button', { name: /^(Iniciar|Continuar) jogo$/ }).click();
     await conflict;
     await expect(second.getByRole('alert')).toBeVisible();
     await expect(second.getByRole('button', { name: 'Pausar', exact: true })).toHaveCount(0);
@@ -559,7 +562,7 @@ test('save corrompido na resposta da lease preserva a cópia local íntegra e im
   });
   try {
     await page.getByRole('article', { name: games.GBA.name, exact: true }).getByRole('button', { name: 'Jogar', exact: true }).click();
-    await page.getByRole('button', { name: 'Iniciar jogo', exact: true }).click();
+    await page.getByRole('button', { name: /^(Iniciar|Continuar) jogo$/ }).click();
     await expect(page.getByRole('alert')).toContainText(/integridade.*cópia local.*preservada/i);
     await expect(page.getByRole('button', { name: 'Pausar', exact: true })).toHaveCount(0);
     expect(await recoverySummary(page, user, 'GBA')).toEqual(expectedRecovery);
@@ -645,3 +648,285 @@ test(`resposta perdida de save A preserva sucessor B até confirmar por ${method
   }
 });
 }
+
+test('saída sem save orienta, mantém sessão e permite saída consciente', async ({ page }) => {
+  const user = await createUser();
+  await login(page, user); await openGame(page, 'NONE');
+  await page.getByRole('button', { name: 'Salvar e voltar', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toContainText('Sem save confirmado');
+  expect(await saved(user, 'NONE')).toBeUndefined();
+  await dialog.getByRole('button', { name: 'Permanecer no jogo' }).click();
+  await page.getByRole('button', { name: 'Retomar', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Pausar', exact: true })).toBeVisible();
+  await leaveGame(page);
+  expect(await saved(user, 'NONE')).toBeUndefined();
+});
+
+test('ACK inválido preserva recuperação e impede saída prematura', async ({ page }) => {
+  const user = await createUser();
+  await login(page, user); await openGame(page, 'GBA');
+  const url = `**/api/play/${games.GBA.id}/save`;
+  await page.route(url, async route => {
+    const response = await route.fetch(); const body = await response.json();
+    body.save.version = -1;
+    await route.fulfill({ response, json: body });
+  });
+  await pressKey(page, 'x');
+  await page.getByRole('button', { name: 'Salvar e voltar', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('confirmação');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  expect(await recoverySummary(page, user, 'GBA')).not.toBeNull();
+  await page.unroute(url);
+  await page.getByRole('button', { name: 'Tentar sincronizar', exact: true }).click();
+  await expectSaved(user, 'GBA', 1);
+  await expect(page.getByTestId('save-status')).toContainText('Salvo no servidor');
+  expect(await page.evaluate(() => { const event = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(event); return event.defaultPrevented; })).toBe(false);
+  await leaveGame(page);
+  await page.getByRole('article', { name: games.GBA.name, exact: true }).getByRole('button', { name: 'Jogar', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Continuar jogo', exact: true })).toBeVisible();
+});
+
+test('volume real preserva mute, preferências antigas, isolamento e fecha áudio', async ({ page }) => {
+  const user = await createUser();
+  await page.addInitScript(() => {
+    const Original = window.AudioContext;
+    window.__audio = [];
+    window.AudioContext = class extends Original {
+      constructor(...args) { super(...args); window.__audio.push(this); }
+      createGain() { const gain = super.createGain(); this.__gain = gain; return gain; }
+    };
+  });
+  await login(page, user);
+  await page.evaluate(id => localStorage.setItem(`emulador-player-v1:${id}`, JSON.stringify({version:1,size:'compact',showButtons:false,bindings:{up:['ArrowUp'],down:['ArrowDown'],left:['ArrowLeft'],right:['ArrowRight'],a:['KeyX'],b:['KeyZ'],start:['Enter'],select:['ShiftLeft','ShiftRight'],l:['KeyQ'],r:['KeyW']}})), user.id);
+  await openGame(page, 'GB');
+  const volume = page.getByRole('slider', { name: 'Volume' });
+  await expect(volume).toHaveValue('70');
+  await expect(page.getByLabel('Tamanho da tela')).toHaveValue('compact');
+  const gain = () => page.evaluate(() => window.__audio.at(-1).__gain.gain.value);
+  expect(await gain()).toBe(0);
+  await page.getByRole('button', { name: 'Ativar áudio', exact: true }).click();
+  expect(await gain()).toBeCloseTo(.7);
+  await volume.fill('35');
+  expect(await gain()).toBeCloseTo(.35);
+  await volume.press('ArrowRight'); await expect(volume).toHaveValue('36');
+  expect(await gain()).toBeCloseTo(.36);
+  await page.getByRole('button', { name: 'Silenciar', exact: true }).click(); expect(await gain()).toBe(0);
+  await page.getByRole('button', { name: 'Ativar áudio', exact: true }).click(); expect(await gain()).toBeCloseTo(.36);
+  await volume.fill('0'); expect(await gain()).toBe(0);
+  await volume.fill('36');
+  await page.getByRole('button', { name: 'Tela cheia', exact: true }).click();
+  await expect(volume).toBeVisible();
+  await page.getByRole('button', { name: 'Sair da tela cheia', exact: true }).click();
+  await page.setViewportSize({ width: 375, height: 720 });
+  await expect(volume).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  const box = await volume.boundingBox();
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: box.x + box.width * .8, y: box.y + box.height / 2 }] });
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await expect(volume).not.toHaveValue('36');
+  await volume.fill('36');
+  await page.getByRole('button', { name: 'Pausar', exact: true }).click(); expect(await gain()).toBe(0);
+  await leaveGame(page);
+  expect(await page.evaluate(() => window.__audio.every(audio => audio.state === 'closed'))).toBe(true);
+  await openGame(page, 'GB'); await expect(volume).toHaveValue('36'); expect(await gain()).toBe(0);
+  await leaveGame(page);
+  const other = await createUser();
+  await page.getByRole('button', { name: 'Sair', exact: true }).click();
+  await login(page, other); await openGame(page, 'GB'); await expect(volume).toHaveValue('70');
+  await leaveGame(page);
+});
+
+async function enterReserved(page, key) {
+  await page.getByRole('article', { name: games[key].name, exact:true }).getByRole('button', {name:'Jogar',exact:true}).click();
+  await page.getByRole('button', {name:/^(Iniciar|Continuar) jogo$/}).click();
+  await expect(page.getByRole('button', {name:'Encerrar sessão anterior e jogar aqui',exact:true})).toBeVisible();
+}
+async function takeHere(page) {
+  await page.getByRole('button', {name:'Encerrar sessão anterior e jogar aqui',exact:true}).click();
+  await expect(page.getByRole('dialog')).toContainText('Progresso ainda não sincronizado');
+  await page.getByRole('button', {name:'Confirmar e jogar aqui',exact:true}).click();
+}
+
+test('lease: reload real recupera imediatamente com confirmação e restaura save', async ({page}) => {
+  const user=await createUser(); await login(page,user); await openGame(page,'FLASH1M');
+  await pressKey(page,'x'); const initial=await expectSaved(user,'FLASH1M',1);
+  await expect(page.getByTestId('save-status')).toContainText('Salvo no servidor');
+  await page.reload();
+  await expect(page.getByRole('heading',{name:'Biblioteca',exact:true})).toBeVisible();
+  await enterReserved(page,'FLASH1M');
+  await page.getByRole('button',{name:'Encerrar sessão anterior e jogar aqui',exact:true}).click();
+  await page.getByRole('button',{name:'Cancelar',exact:true}).click();
+  await expect(page.getByRole('button',{name:'Pausar',exact:true})).toHaveCount(0);
+  let loseResponse = true;
+  const url = `**/api/play/${games.FLASH1M.id}/lease`;
+  await page.route(url, async route => {
+    if (loseResponse && route.request().method() === 'POST' && route.request().postDataJSON()?.expectedGeneration) {
+      loseResponse = false; await route.fetch(); await route.abort('failed');
+    } else await route.continue();
+  });
+  await takeHere(page);
+  await expect(page.getByRole('alert')).toContainText('conectar');
+  await expect(page.getByRole('button', {name:'Encerrar sessão anterior e jogar aqui',exact:true})).toBeVisible();
+  await takeHere(page);
+  await page.unroute(url);
+  await expect(page.getByRole('button',{name:'Pausar',exact:true})).toBeVisible();
+  await expectScreen(page,'GBA',1);
+  expect((await saved(user,'FLASH1M')).sha256).toBe(initial.sha256);
+  await leaveGame(page);
+});
+
+test('lease: fechamento e expiração permitem tentar novamente sem novo reload', async ({page,context}) => {
+  const user=await createUser(); await login(page,user); await openGame(page,'GB');
+  await pressKey(page,'x'); await expectSaved(user,'GB',1);
+  await expect(page.getByTestId('save-status')).toContainText('Salvo no servidor');
+  await page.close();
+  const next=await context.newPage(); await next.goto(origin);
+  await enterReserved(next,'GB');
+  await pool.query("UPDATE play_leases SET expires_at=clock_timestamp()-interval '1 second' WHERE user_id=$1 AND game_id=$2",[user.id,games.GB.id]);
+  await next.getByRole('button',{name:'Tentar novamente',exact:true}).click();
+  await expect(next.getByRole('button',{name:'Pausar',exact:true})).toBeVisible();
+  await expectScreen(next,'GB',1); await leaveGame(next);
+});
+
+test('lease: duas abas, pendência isolada e retorno pageshow não apagam recuperação nova', async ({page,context}) => {
+  const user=await createUser(); await login(page,user); await openGame(page,'GBA');
+  await pressKey(page,'x'); await expectSaved(user,'GBA',1);
+  await expect(page.getByTestId('save-status')).toContainText('Salvo no servidor');
+  const url=`**/api/play/${games.GBA.id}/save`;
+  await page.route(url,route=>route.abort('failed'));
+  await pressKey(page,'z');
+  await expect(page.getByRole('button',{name:'Tentar sincronizar',exact:true})).toBeVisible();
+  const next=await context.newPage(); await next.goto(origin);
+  await enterReserved(next,'GBA'); await takeHere(next);
+  await expect(next.getByRole('button',{name:'Pausar',exact:true})).toBeVisible();
+  await expectScreen(next,'GBA',0); await expectSaved(user,'GBA',0);
+  await pressKey(next,'x'); await expectSaved(user,'GBA',1);
+  await expect(next.getByTestId('save-status')).toContainText('Salvo no servidor');
+  await next.route(url,route=>route.abort('failed')); await pressKey(next,'z');
+  await expect(next.getByRole('button',{name:'Tentar sincronizar',exact:true})).toBeVisible();
+  const pending=await recoverySummary(next,user,'GBA');
+  await page.evaluate(()=>window.dispatchEvent(new PageTransitionEvent('pageshow',{persisted:true})));
+  await expect(page.getByRole('alert')).toContainText('perdeu a reserva');
+  await expect(page.getByRole('button',{name:'Retomar',exact:true})).toBeDisabled();
+  await expect.poll(()=>page.evaluate(async ({uid,gid})=>{
+    const {readIsolated}=await import('/src/save-recovery.ts'); return (await readIsolated(uid,gid)).length;
+  },{uid:user.id,gid:games.GBA.id})).toBe(1);
+  expect(await recoverySummary(next,user,'GBA')).toEqual(pending);
+  await page.getByRole('button',{name:'Voltar mantendo cópia local',exact:true}).click();
+  await expect(page.getByRole('heading',{name:'Biblioteca',exact:true})).toBeVisible();
+  await next.unroute(url); await next.getByRole('button',{name:'Tentar sincronizar',exact:true}).click();
+  await expectSaved(user,'GBA',0); await leaveGame(next);
+  await next.getByRole('article',{name:games.GBA.name,exact:true}).getByRole('button',{name:'Jogar',exact:true}).click();
+  await next.getByRole('button',{name:'Continuar jogo',exact:true}).click();
+  await expect(next.getByRole('alert')).toContainText('pendência local isolada');
+  next.once('dialog',dialog=>dialog.accept());
+  await next.getByRole('button',{name:'Descartar cópia local e usar save do servidor',exact:true}).click();
+  await expect(next.getByRole('button',{name:'Continuar jogo',exact:true})).toBeEnabled();
+  await next.getByRole('button',{name:'Continuar jogo',exact:true}).click();
+  await expect(next.getByRole('button',{name:'Pausar',exact:true})).toBeVisible();
+  await expectScreen(next,'GBA',0); await leaveGame(next);
+});
+
+test('lease: resposta de aquisição atrasada não toma recuperação da nova aba', async ({page,context}) => {
+  const user=await createUser(); await login(page,user);
+  let releaseResponse; const hold=new Promise(resolve=>{releaseResponse=resolve;});
+  let acquired; const ready=new Promise(resolve=>{acquired=resolve;});
+  const url=`**/api/play/${games.GB.id}/lease`;
+  await page.route(url,async route=>{
+    if(route.request().method()!=='POST') return route.continue();
+    const response=await route.fetch(); acquired(); await hold;
+    await route.fulfill({response});
+  });
+  const next=await context.newPage();
+  try {
+    await page.getByRole('article',{name:games.GB.name,exact:true}).getByRole('button',{name:'Jogar',exact:true}).click();
+    await page.getByRole('button',{name:'Iniciar jogo',exact:true}).click(); await ready;
+    await next.goto(origin); await enterReserved(next,'GB'); await takeHere(next);
+    await expect(next.getByRole('button',{name:'Pausar',exact:true})).toBeVisible();
+    releaseResponse();
+    await expect(page.getByRole('alert')).toContainText('Outra instância');
+    await expect(page.getByRole('button',{name:'Pausar',exact:true})).toHaveCount(0);
+    await pressKey(next,'x'); await expectSaved(user,'GB',1); await leaveGame(next);
+  } finally {releaseResponse();await page.unroute(url);await next.close();}
+});
+
+for(const cartridge of ['GB','FLASH1M']) test(`velocidade: ${cartridge} sincroniza último save acelerado e reabre sem trocar reserva ao ajustar`,async({page})=>{
+  const user=await createUser();await login(page,user);await openGame(page,cartridge);
+  const lease=async()=>(await pool.query('SELECT token_hash FROM play_leases WHERE user_id=$1 AND game_id=$2',[user.id,games[cartridge].id])).rows[0].token_hash;
+  const original=await lease();const speed=page.getByRole('combobox',{name:'Velocidade',exact:true});
+  await speed.selectOption('10');await pressKey(page,'x');await expectScreen(page,cartridge==='GB'?'GB':'GBA',1);
+  await page.getByRole('button',{name:'Pausar',exact:true}).click();const initial=await expectSaved(user,cartridge,1);
+  expect(await lease()).toBe(original);await speed.selectOption('3');
+  await page.getByRole('button',{name:'Retomar',exact:true}).click();await expect(page.getByRole('button',{name:'Pausar',exact:true})).toBeVisible();
+  await pressKey(page,'z');await leaveGame(page);const final=await expectSaved(user,cartridge,0);expect(final.version).toBeGreaterThan(initial.version);
+  await openGame(page,cartridge);await expect(speed).toHaveValue('3');await expectScreen(page,cartridge==='GB'?'GB':'GBA',0);
+  await speed.selectOption('1');await leaveGame(page);
+});
+
+for(const cartridge of ['GB','FLASH1M']) test(`states: ${cartridge} slots reais, load exato, cartucho e ACK perdido`,async({page})=>{
+ const user=await createUser();await login(page,user);
+ await page.route('**/emulator/mgba.js',async route=>{const response=await route.fetch();await route.fulfill({response,body:await response.text()+'\nconst statesFactory=window.createMgbaModule;window.createMgbaModule=async(...args)=>{const m=await statesFactory(...args);window.__statesCore=m;return m;};'});});
+ await openGame(page,cartridge);await page.getByRole('combobox',{name:'Velocidade',exact:true}).selectOption('3');await page.getByRole('slider',{name:'Volume'}).fill('35');
+ await pressKey(page,'x');await expectSaved(user,cartridge,1);await page.getByRole('button',{name:'Saves',exact:true}).click();
+ const frame=await page.evaluate(()=>window.__statesCore._mgbawasm_frame_counter());
+ const quick=page.getByRole('region',{name:'Save rápido',exact:true});
+ await quick.getByLabel('Rótulo Save rápido').fill('Ponto sintético');await quick.getByRole('button',{name:'Salvar rápido',exact:true}).click();
+ await expect(page.getByText('Estado confirmado no servidor.',{exact:true})).toBeVisible();
+ const row=(await pool.query('SELECT * FROM save_states WHERE user_id=$1 AND game_id=$2 AND slot=0',[user.id,games[cartridge].id])).rows[0];expect(row.data.length).toBe(cartridge==='GB'?71680:397312);
+ await quick.getByRole('button',{name:'Salvar rápido',exact:true}).click();await page.getByRole('button',{name:'Cancelar',exact:true}).click();
+ expect((await pool.query('SELECT version FROM save_states WHERE user_id=$1 AND game_id=$2 AND slot=0',[user.id,games[cartridge].id])).rows[0].version).toBe(1);
+ await page.getByRole('region',{name:'Slot 1',exact:true}).getByRole('button',{name:'Salvar estado',exact:true}).click();await expect(page.getByText('Estado confirmado no servidor.',{exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'Fechar Saves',exact:true}).click();await page.getByRole('button',{name:'Retomar',exact:true}).click();await expect(page.getByRole('button',{name:'Pausar',exact:true})).toBeVisible();
+ await pressKey(page,'z');await expectSaved(user,cartridge,0);await page.getByRole('button',{name:'Saves',exact:true}).click();
+ const before=await page.evaluate(()=>window.__statesCore._mgbawasm_frame_counter());
+ const loadUrl=`**/api/play/${games[cartridge].id}/states/0/load`;
+ await page.route(loadUrl,async route=>{const response=await route.fetch(),body=await response.json();body.state.dataBase64='AAAA';await route.fulfill({response,json:body});});
+ await quick.getByRole('button',{name:'Carregar rápido',exact:true}).click();await page.getByRole('button',{name:'Confirmar',exact:true}).click();
+ await expect(page.getByRole('dialog',{name:'Saves',exact:true}).getByRole('alert')).toContainText('corrompido');expect(await page.evaluate(()=>window.__statesCore._mgbawasm_frame_counter())).toBe(before);
+ await page.unroute(loadUrl);
+ // Correct checksum but invalid native core header must fail in a disposable core.
+ await page.evaluate(()=>{window.__previousStatesCore=window.__statesCore;});
+ await page.route(loadUrl,async route=>{const response=await route.fetch(),body=await response.json();const bytes=Buffer.from(body.state.dataBase64,'base64');bytes.fill(0,0,16);body.state.dataBase64=bytes.toString('base64');body.state.sha256=createHash('sha256').update(bytes).digest('hex');await route.fulfill({response,json:body});});
+ await quick.getByRole('button',{name:'Carregar rápido',exact:true}).click();await page.getByRole('button',{name:'Confirmar',exact:true}).click();
+ await expect(page.getByRole('dialog',{name:'Saves',exact:true}).getByRole('alert')).toContainText('corrompido');expect(await page.evaluate(()=>window.__previousStatesCore._mgbawasm_frame_counter())).toBe(before);
+ await page.unroute(loadUrl);
+ const saveUrl=`**/api/play/${games[cartridge].id}/save`;let lose=true;
+ await page.route(saveUrl,async route=>{if(lose){lose=false;await route.fetch();await route.abort('failed');}else await route.continue();});
+ await quick.getByRole('button',{name:'Carregar rápido',exact:true}).click();await page.getByRole('button',{name:'Confirmar',exact:true}).click();
+ await expect(page.getByRole('dialog',{name:'Saves',exact:true}).getByRole('alert')).toBeVisible();expect(await page.evaluate(()=>window.__statesCore._mgbawasm_frame_counter())).toBe(frame);
+ await page.getByRole('button',{name:'Fechar Saves',exact:true}).click();await page.unroute(saveUrl);await page.getByRole('button',{name:'Tentar sincronizar',exact:true}).click();await expectSaved(user,cartridge,1);
+ await expect(page.getByRole('combobox',{name:'Velocidade',exact:true})).toHaveValue('3');await expect(page.getByRole('slider',{name:'Volume'})).toHaveValue('35');
+ await leaveGame(page);await openGame(page,cartridge);await expectScreen(page,cartridge==='GB'?'GB':'GBA',1);await leaveGame(page);
+ await page.getByRole('button',{name:'Meus saves',exact:true}).click();await expect(page.getByRole('heading',{name:'Meus saves',exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'Excluir Slot 1',exact:true}).click();await page.getByLabel('Digite EXCLUIR').fill('EXCLUIR');await page.getByRole('button',{name:'Confirmar exclusão',exact:true}).click();
+ await expect(page.getByRole('button',{name:'Excluir Slot 1',exact:true})).toHaveCount(0);
+ expect((await saved(user,cartridge)).data[0]).toBe(1);
+});
+
+test('states: toque/tela cheia, administração separada e reset bloqueia pendência antiga',async({browser})=>{
+ const context=await browser.newContext({viewport:{width:390,height:844},hasTouch:true});const page=await context.newPage();
+ const user=await createUser(),master=await createUser('MASTER');
+ const adminContext=await browser.newContext(),adminPage=await adminContext.newPage();
+ try{
+  await login(page,user);await openGame(page,'GB');await pressKey(page,'x');const old=await expectSaved(user,'GB',1);
+  await page.getByRole('button',{name:'Tela cheia',exact:true}).tap();
+  await expect.poll(()=>page.evaluate(()=>!!document.fullscreenElement)).toBe(true);
+  await page.getByRole('button',{name:'Saves',exact:true}).tap();
+  const quick=page.getByRole('region',{name:'Save rápido',exact:true});await quick.getByRole('button',{name:'Salvar rápido',exact:true}).tap();await expect(page.getByText('Estado confirmado no servidor.',{exact:true})).toBeVisible();
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
+  await page.getByRole('button',{name:'Fechar Saves',exact:true}).tap();await page.evaluate(()=>document.exitFullscreen());
+  await login(adminPage,master);await adminPage.getByRole('button',{name:'Meus saves',exact:true}).click();await expect(adminPage.getByText('Nenhum save encontrado.',{exact:true})).toBeVisible();
+  await adminPage.getByRole('button',{name:'Administração de saves',exact:true}).click();await adminPage.getByLabel('Usuário',{exact:true}).fill(user.username);await adminPage.getByRole('button',{name:'Filtrar',exact:true}).click();
+  await adminPage.getByRole('button',{name:'Excluir Save nativo',exact:true}).click();await expect(adminPage.getByRole('dialog')).toContainText(user.username);await adminPage.getByLabel('Digite EXCLUIR').fill('EXCLUIR');await adminPage.getByRole('button',{name:'Confirmar exclusão',exact:true}).click();await expect(adminPage.getByRole('dialog').getByRole('alert')).toContainText('reserva ativa');
+  await adminPage.getByRole('button',{name:'Cancelar',exact:true}).click();await leaveGame(page);
+  // Test-owned old pending snapshot; no personal storage is used.
+  await page.evaluate(async({userId,gameId,bytes,hash,version})=>{const r=await import('/src/save-recovery.ts');const owner=await r.recoveryOwner(userId,gameId);await r.writeRecovery({userId,gameId,revision:crypto.randomUUID(),baseVersion:version,dataBase64:bytes,sha256:hash,savedAt:new Date().toISOString()},undefined,owner);},{userId:user.id,gameId:games.GB.id,bytes:old.data.toString('base64'),hash:old.sha256,version:old.version});
+  await adminPage.getByRole('button',{name:'Excluir Save nativo',exact:true}).click();await adminPage.getByLabel('Digite EXCLUIR').fill('EXCLUIR');await adminPage.getByRole('button',{name:'Confirmar exclusão',exact:true}).click();await expect(adminPage.getByRole('dialog')).toHaveCount(0);
+  expect(await saved(user,'GB')).toBeUndefined();await expect(adminPage.getByRole('button',{name:'Excluir Save rápido',exact:true})).toBeVisible();
+  await page.getByRole('article',{name:games.GB.name,exact:true}).getByRole('button',{name:'Jogar',exact:true}).tap();await page.getByRole('button',{name:'Iniciar jogo',exact:true}).tap();
+  await expect(page.getByRole('alert')).toContainText('excluído/reiniciado');expect(await saved(user,'GB')).toBeUndefined();expect(await recoverySummary(page,user,'GB')).not.toBeNull();
+  await expect(page.getByRole('button',{name:'Descartar cópia local e usar save do servidor',exact:true})).toBeVisible();
+ }finally{await context.close();await adminContext.close();}
+});

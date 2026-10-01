@@ -1,3 +1,5 @@
+import { STATE_CORE } from './state';
+import { normalizeSpeed } from './speed';
 import type { Emulator, EmulatorKey, EmulatorOptions, MgbaFactory, MgbaModule } from './types';
 
 export type { Emulator, EmulatorKey, EmulatorOptions } from './types';
@@ -8,6 +10,7 @@ const AUDIO_FRAMES = 4096;
 const keyBits: Record<EmulatorKey, number> = {
   a: 1, b: 2, select: 4, start: 8, right: 16, left: 32, up: 64, down: 128, r: 256, l: 512,
 };
+let binaryPromise: Promise<Uint8Array> | undefined;
 let factoryPromise: Promise<MgbaFactory> | undefined;
 
 function loadFactory(): Promise<MgbaFactory> {
@@ -43,8 +46,8 @@ function allocate(module: MgbaModule, bytes: Uint8Array): number {
 /**
  * Each call owns a fresh WASM instance, native save memory and audio context.
  * No SDK, IndexedDB, OPFS, browser cache of ROMs, global inputs or BIOS is used.
- * The returned instance is muted and paused at frame zero, with the supplied
- * native save already attached. The caller owns synchronization and UI input.
+ * The returned instance is muted and paused, at frame zero or the supplied
+ * state, with native save already attached. The caller owns sync and UI input.
  */
 export async function createEmulator(options: EmulatorOptions): Promise<Emulator> {
   const { canvas, console: gameConsole, onError } = options;
@@ -55,7 +58,16 @@ export async function createEmulator(options: EmulatorOptions): Promise<Emulator
   const context = canvas.getContext('2d');
   if (!context) throw new Error('O navegador não oferece o desenho necessário para jogar.');
   const factory = await loadFactory();
+  binaryPromise ??= (async () => {
+    const response = await fetch('/emulator/mgba.wasm');
+    if (!response.ok) throw new Error('Motor indisponível.');
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    const digest = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), b => b.toString(16).padStart(2,'0')).join('');
+    if (`wasm:${digest}` !== STATE_CORE) throw new Error('Identidade do core incompatível. Atualize a aplicação.');
+    return bytes;
+  })().catch(reason => { binaryPromise=undefined; throw reason; });
   let module: MgbaModule | null = await factory({
+    wasmBinary: await binaryPromise,
     locateFile: (path) => `${ASSET_ROOT}${path.split('/').pop()}`,
     print: () => {},
     printErr: () => {},
@@ -66,9 +78,11 @@ export async function createEmulator(options: EmulatorOptions): Promise<Emulator
   let audioPointer = 0;
   let paused = true;
   let muted = true;
+  let volume = 0.7;
+  let speed = normalizeSpeed(1);
   let destroyed = false;
   let animation = 0;
-  let previousTime = 0;
+  let previousTime: number | null = null;
   let accumulated = 0;
   let keys = 0;
   let frameDuration = 1000 / 59.7275;
@@ -108,6 +122,19 @@ export async function createEmulator(options: EmulatorOptions): Promise<Emulator
     if (closingAudio && closingAudio.state !== 'closed') await closingAudio.close();
   }
 
+  function captureState() {
+    const core=liveModule();
+    if (!paused) throw new Error('Pause antes de capturar estado.');
+    const size=core._mgbawasm_state_size();
+    if (size !== (gameConsole==='GB' ? 71680 : 397312)) throw new Error('Formato de estado incompatível.');
+    const pointer=core._malloc(size);
+    if (!pointer) throw new Error('Memória insuficiente para estado.');
+    try {
+      if (!core._mgbawasm_state_save(pointer)) throw new Error('Não foi possível capturar o estado.');
+      return {data:core.HEAPU8.slice(pointer,pointer+size),native:readNativeSave() ?? new Uint8Array()};
+    } finally {core._free(pointer);}
+  }
+
   function readNativeSave(): Uint8Array | null {
     const core = liveModule();
     const length = core._mgbawasm_sram_save();
@@ -136,10 +163,10 @@ export async function createEmulator(options: EmulatorOptions): Promise<Emulator
   }
 
   function drainAudio(core: MgbaModule) {
-    for (;;) {
+    for (let batch = 0; batch < 4; batch += 1) {
       const count = core._mgbawasm_read_audio(audioPointer, AUDIO_FRAMES);
       if (count <= 0) return;
-      if (!muted && audio?.state === 'running' && sink) {
+      if (!muted && speed === 1 && audio?.state === 'running' && sink) {
         const samples = core.HEAP16.slice(audioPointer / 2, audioPointer / 2 + count * 2);
         sink.port.postMessage({ samples, rate: core._mgbawasm_sample_rate() }, [samples.buffer]);
       }
@@ -151,16 +178,24 @@ export async function createEmulator(options: EmulatorOptions): Promise<Emulator
     if (paused || destroyed) return;
     try {
       const core = liveModule();
-      if (!previousTime) previousTime = now;
-      accumulated += Math.min(now - previousTime, frameDuration * 5);
+      if (document.hidden) { setPaused(true); return; }
+      const elapsed = previousTime === null ? 0 : now - previousTime;
       previousTime = now;
+      // A long suspension is not emulated debt. Keep one bounded RAF chain.
+      if (elapsed < 0 || elapsed > 100) accumulated = 0;
+      else accumulated = Math.min(accumulated + elapsed * speed, frameDuration * 12);
       let frames = 0;
-      while (accumulated >= frameDuration && frames < 5) {
+      const began = performance.now();
+      while (accumulated >= frameDuration && frames < 12) {
         core._mgbawasm_run_frame();
         drainAudio(core);
         accumulated -= frameDuration;
         frames += 1;
+        // Yield even on a slow device; one core frame cannot be preempted.
+        if (performance.now() - began >= 8) break;
       }
+      // Discard unpaid whole frames rather than growing a catch-up backlog.
+      accumulated %= frameDuration;
       if (frames) renderFrame(core);
       animation = requestAnimationFrame(tick);
     } catch (error) {
@@ -174,7 +209,7 @@ export async function createEmulator(options: EmulatorOptions): Promise<Emulator
     if (paused === value) return;
     paused = value;
     cancelAnimationFrame(animation);
-    previousTime = 0;
+    previousTime = null;
     accumulated = 0;
     keys = 0;
     core._mgbawasm_set_keys(0);
@@ -182,22 +217,44 @@ export async function createEmulator(options: EmulatorOptions): Promise<Emulator
     if (paused) {
       if (audio?.state === 'running') void audio.suspend().catch(() => {});
     } else {
-      if (gain) gain.gain.value = muted ? 0 : 0.7;
-      if (!muted) void audio?.resume().catch(() => {});
+      if (gain) gain.gain.value = muted || speed !== 1 ? 0 : volume;
+      if (!muted && speed === 1) void audio?.resume().catch(() => {});
       animation = requestAnimationFrame(tick);
     }
   }
 
   async function resumeAudio() {
     liveModule();
-    if (audio && !muted && !paused) await audio.resume();
+    if (audio && !muted && !paused && speed === 1) await audio.resume();
+  }
+
+  async function setSpeed(value: number) {
+    liveModule();
+    const next = normalizeSpeed(value);
+    if (speed === next) return;
+    speed = next;
+    previousTime = null;
+    accumulated = 0;
+    clearAudio();
+    if (speed !== 1) {
+      if (audio?.state === 'running') await audio.suspend();
+    } else {
+      if (gain) gain.gain.value = muted || paused ? 0 : volume;
+      await resumeAudio();
+    }
+  }
+
+  function setVolume(percent: number) {
+    if (!Number.isFinite(percent)) return;
+    volume = Math.max(0, Math.min(100, percent)) / 100;
+    if (gain) gain.gain.value = muted || paused || speed !== 1 ? 0 : volume;
   }
 
   async function setMuted(value: boolean) {
     liveModule();
     muted = value;
     clearAudio();
-    if (gain) gain.gain.value = muted || paused ? 0 : 0.7;
+    if (gain) gain.gain.value = muted || paused || speed !== 1 ? 0 : volume;
     if (muted) {
       if (audio?.state === 'running') await audio.suspend();
     } else {
@@ -235,6 +292,15 @@ export async function createEmulator(options: EmulatorOptions): Promise<Emulator
       }
     }
     if (module._mgbawasm_frame_counter() !== 0) throw new Error('O motor iniciou antes de preparar o progresso.');
+    if (options.state) {
+      if (options.state.length !== module._mgbawasm_state_size()) throw new Error('Tamanho de estado incompatível.');
+      const pointer=allocate(module, options.state);
+      try { if (!module._mgbawasm_state_load(pointer)) throw new Error('Estado corrompido ou incompatível.'); }
+      finally {module._free(pointer);}
+      module._mgbawasm_set_keys(0);
+      const restored=readNativeSave();
+      if (options.save && (!restored || restored.length!==options.save.length || restored.some((b,i)=>b!==options.save![i]))) throw new Error('Estado e memória do cartucho divergiram.');
+    }
     frameDuration = 1_000_000_000 / module._mgbawasm_framerate_micro();
     audioPointer = module._malloc(AUDIO_FRAMES * 2 * 2);
     if (!audioPointer) throw new Error('Memória insuficiente para o áudio.');
@@ -251,7 +317,7 @@ export async function createEmulator(options: EmulatorOptions): Promise<Emulator
     context.fillStyle = '#101a16';
     context.fillRect(0, 0, canvas.width, canvas.height);
     return {
-      readNativeSave, setPaused, setMuted, resumeAudio, destroy,
+      captureState, readNativeSave, setPaused, setSpeed, setVolume, setMuted, resumeAudio, destroy,
       input(key, pressed) {
         const core = liveModule();
         if (paused || (gameConsole === 'GB' && (key === 'l' || key === 'r'))) return;

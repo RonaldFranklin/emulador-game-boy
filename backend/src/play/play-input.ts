@@ -16,15 +16,23 @@ function leaseId(value: unknown): string {
   return value;
 }
 
-export function acquireInput(input: unknown): void { object(input, []); }
+export function acquireInput(input: unknown): string | undefined {
+  const body = object(input, ['expectedGeneration']);
+  if (body.expectedGeneration === undefined) return;
+  if (typeof body.expectedGeneration !== 'string' || !/^[a-f0-9]{64}$/.test(body.expectedGeneration)) {
+    throw new BadRequestException('Geração da reserva inválida.');
+  }
+  return body.expectedGeneration;
+}
 
 export function leaseInput(input: unknown): string {
   return leaseId(object(input, ['leaseId']).leaseId);
 }
 
 export function saveInput(input: unknown) {
-  const body = object(input, ['leaseId', 'baseVersion', 'dataBase64', 'sha256']);
+  const body = object(input, ['leaseId', 'baseVersion', 'dataBase64', 'sha256', 'epoch']);
   const id = leaseId(body.leaseId);
+  const epoch = body.epoch == null ? null : leaseId(body.epoch);
   if (typeof body.baseVersion !== 'number' || !Number.isInteger(body.baseVersion) || body.baseVersion < 0 || body.baseVersion > 2147483647) {
     throw new BadRequestException('Versão de progresso inválida.');
   }
@@ -33,7 +41,7 @@ export function saveInput(input: unknown) {
   if (body.sha256 !== undefined && (typeof body.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(body.sha256))) {
     throw new BadRequestException('Checksum de progresso inválido.');
   }
-  return { leaseId: id, baseVersion: body.baseVersion, dataBase64: body.dataBase64, sha256: body.sha256 as string | undefined };
+  return { epoch, leaseId: id, baseVersion: body.baseVersion, dataBase64: body.dataBase64, sha256: body.sha256 as string | undefined };
 }
 
 /** Called only after transaction-level actor/game/lease authorization. */

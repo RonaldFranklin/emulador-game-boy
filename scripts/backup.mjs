@@ -14,7 +14,7 @@ const path = `.local/backups/emulador-${new Date().toISOString().replaceAll(':',
 try {
   const manifest = await createCatalogueBackup({ backendContainer, databaseContainer, outputPath: path });
   console.log(`Backup consistente concluído: ${path}`);
-  console.log(`Banco + ${manifest.games.length} jogo(s) + ${manifest.files.length - 1} arquivo(s) privados + ${manifest.saves.length} save(s) nativo(s).`);
+  console.log(`Banco + ${manifest.games.length} jogo(s) + ${manifest.files.length - 1} arquivo(s) privados + ${manifest.saves.length} save(s) nativo(s) + ${manifest.states.length} estado(s).`);
   console.log(`Verifique a restauração: npm run restore:verify -- ${path}`);
 } catch (error) {
   console.error(`Backup incompleto em ${path}; não o use para restauração.`);

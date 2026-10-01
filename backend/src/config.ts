@@ -3,6 +3,7 @@ import { isAbsolute, resolve } from 'node:path';
 
 export interface AppConfig {
   origin: string;
+  trustedProxyHost?: string;
   host: string;
   port: number;
   secureCookie: boolean;
@@ -36,6 +37,7 @@ export function readConfig(): AppConfig {
   }
   return {
     origin,
+    trustedProxyHost: process.env.TRUSTED_PROXY_HOST || undefined,
     catalogStorageDir: resolve(catalogStorageDir),
     host: process.env.HOST ?? '0.0.0.0',
     port: integer('PORT', 3001, 1, 65535),

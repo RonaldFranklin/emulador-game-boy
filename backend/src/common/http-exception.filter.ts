@@ -27,7 +27,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
     if (status === 429) {
       const body = error instanceof HttpException ? error.getResponse() : undefined;
       const retry = typeof body === 'object' && body !== null && 'retryAfterSeconds' in body ? body.retryAfterSeconds : undefined;
-      response.setHeader('Retry-After', typeof retry === 'number' && Number.isInteger(retry) && retry > 0 && retry <= 3600 ? retry : 900);
+      response.setHeader('Retry-After', typeof retry === 'number' && Number.isInteger(retry) && retry > 0 && retry <= 7200 ? retry : 900);
     }
     response.status(status).json({ statusCode: status, message });
   }

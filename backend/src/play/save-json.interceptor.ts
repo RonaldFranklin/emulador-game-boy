@@ -8,7 +8,7 @@ import { MAX_SAVE_JSON_BYTES } from './play-constants.js';
 @Injectable()
 export class SaveJsonInterceptor implements NestInterceptor {
   private active = 0;
-  private readonly parse = express.json({ limit: MAX_SAVE_JSON_BYTES, strict: true, inflate: false });
+  protected readonly parse = express.json({ limit: MAX_SAVE_JSON_BYTES, strict: true, inflate: false });
 
   async intercept(context: ExecutionContext, next: CallHandler): Promise<Observable<unknown>> {
     const request = context.switchToHttp().getRequest<AuthRequest>();
@@ -39,4 +39,9 @@ export class SaveJsonInterceptor implements NestInterceptor {
       throw error;
     }
   }
+}
+
+@Injectable()
+export class StateJsonInterceptor extends SaveJsonInterceptor {
+ protected override readonly parse = express.json({limit:2100000,strict:true,inflate:false});
 }

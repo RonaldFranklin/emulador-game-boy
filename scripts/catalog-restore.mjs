@@ -1,5 +1,5 @@
 import { run } from './docker.mjs';
-import { normalizeGames, verifyReferences, verifySaveMetadata } from './catalog-backup.mjs';
+import { normalizeGames, verifyReferences, verifySaveMetadata, verifyStateMetadata } from './catalog-backup.mjs';
 
 export async function restoredGames(container, database) {
   const sql = (query) => run(['exec', '--user', 'postgres', container, 'psql', '-U', 'postgres', '-d', database,
@@ -40,5 +40,13 @@ export async function verifyRestoredSaves(container, database, manifest) {
   if (present && await sql("SELECT count(*) FROM game_saves WHERE size <> octet_length(data) OR sha256 <> encode(sha256(data), 'hex')") !== '0') {
     throw new Error('Conteúdo de save restaurado possui tamanho/checksum inválido.');
   }
+  const hasStates=await sql("SELECT to_regclass('public.save_states') IS NOT NULL") === 't';
+  const states=hasStates?JSON.parse(await sql(`SELECT coalesce(json_agg(s ORDER BY user_id,game_id,slot),'[]'::json) FROM (SELECT user_id,game_id,slot,version,label,console,rom_sha256,core_id,format,sha256,native_sha256,octet_length(data) AS size,octet_length(native) AS native_size FROM save_states WHERE data IS NOT NULL) s`)):[];
+  if(JSON.stringify(states)!==JSON.stringify(manifest?.version>=4?manifest.states:[]))throw Error('Estados restaurados divergem do manifesto.');
+  verifyStateMetadata(states,manifest?.games??[]);
+  if(hasStates&&await sql("SELECT count(*) FROM save_states WHERE data IS NOT NULL AND (sha256<>encode(sha256(data),'hex') OR native_sha256<>encode(sha256(native),'hex'))")!=='0')throw Error('Checksum de estado restaurado inválido.');
+  const resets=hasStates?JSON.parse(await sql("SELECT coalesce(json_agg(s ORDER BY user_id,game_id),'[]'::json) FROM (SELECT user_id,game_id,epoch FROM save_resets) s")):[];
+  if(JSON.stringify(resets)!==JSON.stringify(manifest?.version>=4?manifest.resets:[]))throw Error('Marcadores de reinício divergentes.');
+  console.log(`Estados restaurados e conferidos: ${states.length}.`);
   return rows.length;
 }

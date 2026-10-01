@@ -7,10 +7,11 @@ import { Users } from './Users';
 import { ThemeToggle } from './ThemeToggle';
 import { Games } from './Games';
 import { Catalogue } from './Catalogue';
+import { Saves } from './Saves';
 import { Player } from './Player';
 import type { Game } from './games';
 
-type Page = 'games' | 'catalogue' | 'users' | 'password';
+type Page = 'games' | 'catalogue' | 'users' | 'password' | 'saves' | 'adminSaves';
 
 export function App() {
   const [playing, setPlaying] = useState<Game | null>(null);
@@ -78,11 +79,13 @@ export function App() {
   return <div className="app-shell">
     <a className="skip-link" href="#main-content">Ir para o conteúdo</a>
     <header className="site-header"><div className="header-inner"><Brand /><div className="header-actions"><ThemeToggle /><div className="account"><span className="avatar" aria-hidden="true">{session.user.username.slice(0, 1).toUpperCase()}</span><div className="account-info"><strong>{session.user.username}</strong><span>{session.user.role === 'MASTER' ? 'Master' : 'Jogador'}</span></div><button className="button quiet logout-button" onClick={() => void logout()} disabled={signingOut || !!playing} title={playing ? 'Volte à biblioteca antes de sair da conta.' : undefined}><Icon name="exit" /><span>{signingOut ? 'Saindo…' : 'Sair'}</span></button></div></div></div></header>
-    <div className="content-width">
+    <div className={`content-width${playing ? ' player-width' : ''}`}>
       {!playing && <nav className="navigation" aria-label="Navegação principal">
         {!forcedPassword && <button className={activePage === 'games' ? 'nav-item active' : 'nav-item'} onClick={() => setPage('games')} aria-current={activePage === 'games' ? 'page' : undefined}><Icon name="game" />Jogar</button>}
         {!forcedPassword && session.user.role === 'MASTER' && <button className={activePage === 'catalogue' ? 'nav-item active' : 'nav-item'} onClick={() => setPage('catalogue')} aria-current={activePage === 'catalogue' ? 'page' : undefined}><Icon name="catalogue" />Catálogo</button>}
         {!forcedPassword && session.user.role === 'MASTER' && <button className={activePage === 'users' ? 'nav-item active' : 'nav-item'} onClick={() => setPage('users')} aria-current={activePage === 'users' ? 'page' : undefined}><Icon name="users" />Administração</button>}
+        {!forcedPassword && <button className={activePage === 'saves' ? 'nav-item active' : 'nav-item'} aria-current={activePage === 'saves' ? 'page' : undefined} onClick={()=>setPage('saves')}>Meus saves</button>}
+        {!forcedPassword && session.user.role==='MASTER' && <button className={activePage === 'adminSaves' ? 'nav-item active' : 'nav-item'} aria-current={activePage === 'adminSaves' ? 'page' : undefined} onClick={()=>setPage('adminSaves')}>Administração de saves</button>}
         <button className={activePage === 'password' ? 'nav-item active' : 'nav-item'} onClick={() => setPage('password')} aria-current={activePage === 'password' ? 'page' : undefined}><Icon name="lock" />Minha senha</button>
       </nav>}
       <main id="main-content" tabIndex={-1}>
@@ -90,6 +93,8 @@ export function App() {
         {playing ? <Player key={`${session.user.id}:${playing.id}`} game={playing} userId={session.user.id} request={request} onExit={() => setPlaying(null)} /> : activePage === 'games' && <Games request={request} master={session.user.role === 'MASTER'} onPlay={setPlaying} />}
         {activePage === 'catalogue' && session.user.role === 'MASTER' && <Catalogue request={request} />}
         {activePage === 'users' && session.user.role === 'MASTER' && <Users request={request} currentUserId={session.user.id} />}
+        {!playing && activePage === 'saves' && <Saves request={request}/>}
+        {!playing && activePage === 'adminSaves' && session.user.role==='MASTER' && <Saves request={request} admin/>}
         {activePage === 'password' && <ChangePassword request={request} forced={forcedPassword} onChanged={() => endSession('Senha atualizada. Todas as suas sessões foram encerradas. Entre com a nova senha.')} />}
       </main>
       <footer className="site-footer"><span>Emulador Game Boy</span><span>Um lugar para os clássicos.</span></footer>

@@ -1,8 +1,10 @@
 import 'reflect-metadata';
-import { BadRequestException, Global, Module, ValidationPipe } from '@nestjs/common';
+import { BadRequestException, HttpException, Global, Module, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import express, { type NextFunction, type Request, type Response } from 'express';
+import { clientIp } from './common/client-ip.js';
+import { RateLimitService } from './auth/rate-limit.service.js';
 import { AuthModule } from './auth/auth.module.js';
 import { CONFIG } from './auth/session.js';
 import { HttpExceptionFilter } from './common/http-exception.filter.js';
@@ -49,10 +51,31 @@ export async function createApp(): Promise<NestExpressApplication> {
     }
     next();
   });
+  const limits = app.get(RateLimitService);
+  app.use(async (request: Request, response: Response, next: NextFunction) => {
+    try {
+      const ip = await clientIp(request, /^\/api\/health\/?$/i.test(request.path) ? undefined : config.trustedProxyHost);
+      Object.defineProperty(request, 'ip', { value: ip, configurable: true });
+      // Separate from failed-login policy; includes malformed bodies before parsing.
+      await limits.bucket('requests', ip, 1200, 60);
+      if (request.method === 'POST' && /^\/api\/auth\/login\/?$/i.test(request.path)) {
+        await limits.bucket('login-burst', ip, 30, 60);
+      }
+      next();
+    } catch (error) {
+      if (error instanceof HttpException) {
+        const body = error.getResponse() as { message: string; retryAfterSeconds: number };
+        response.setHeader('Retry-After', body.retryAfterSeconds);
+        response.status(error.getStatus()).json({ statusCode: error.getStatus(), message: body.message });
+      } else {
+        response.status(503).json({ statusCode: 503, message: 'Não foi possível validar a origem da conexão. Tente novamente em instantes.' });
+      }
+    }
+  });
   const json = express.json({ limit: '16kb', strict: true });
   app.use((request: Request, response: Response, next: NextFunction) => {
     // The save route parses its larger body in an interceptor after auth/CSRF guards.
-    if (request.method === 'PUT' && /^\/api\/play\/[^/]+\/save\/?$/.test(request.path)) { next(); return; }
+    if (request.method === 'PUT' && /^\/api\/play\/[^/]+\/(?:save|states\/[0-3])\/?$/.test(request.path)) { next(); return; }
     json(request, response, next);
   });
   app.setGlobalPrefix('api');

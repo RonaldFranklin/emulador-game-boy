@@ -1,9 +1,13 @@
+import type { CartridgeState } from './state';
 export type EmulatorKey = 'a' | 'b' | 'select' | 'start' | 'right' | 'left' | 'up' | 'down' | 'r' | 'l';
 
 export interface Emulator {
   /** Copies only native cartridge memory. Never returns a save state. */
+  captureState(): CartridgeState;
   readNativeSave(): Uint8Array | null;
   setPaused(paused: boolean): void;
+  setSpeed(speed: number): Promise<void>;
+  setVolume(percent: number): void;
   setMuted(muted: boolean): Promise<void>;
   /** Call in a user gesture when the browser has blocked audio. */
   resumeAudio(): Promise<void>;
@@ -16,6 +20,7 @@ export interface EmulatorOptions {
   console: 'GB' | 'GBA';
   rom: Uint8Array;
   save: Uint8Array | null;
+  state?: Uint8Array;
   onError?: (error: Error) => void;
 }
 
@@ -30,6 +35,9 @@ export interface MgbaModule {
   _mgbawasm_platform(): number;
   _mgbawasm_unload(): void;
   _mgbawasm_run_frame(): void;
+  _mgbawasm_state_size(): number;
+  _mgbawasm_state_save(pointer: number): number;
+  _mgbawasm_state_load(pointer: number): number;
   _mgbawasm_frame_counter(): number;
   _mgbawasm_video_width(): number;
   _mgbawasm_video_height(): number;
@@ -43,4 +51,4 @@ export interface MgbaModule {
   _mgbawasm_sram_load(pointer: number, length: number): number;
 }
 
-export type MgbaFactory = (options: { locateFile: (path: string) => string; print: () => void; printErr: () => void }) => Promise<MgbaModule>;
+export type MgbaFactory = (options: { wasmBinary?: Uint8Array; locateFile: (path: string) => string; print: () => void; printErr: () => void }) => Promise<MgbaModule>;

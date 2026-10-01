@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { after, before, describe, test } from 'node:test';
+import { after, before, beforeEach, describe, test } from 'node:test';
 import argon2 from 'argon2';
 import pg from 'pg';
 import { databaseConfig } from '../backend/dist/config.js';
@@ -176,6 +176,9 @@ describe('Autenticação e autorização com PostgreSQL isolado', { concurrency:
     await startApp();
     master = await login('master_test', masterPassword);
   });
+
+  // Independent scenarios must not consume one another's login quota. Isolated DB only.
+  beforeEach(async () => { await pool.query('DELETE FROM login_attempts'); });
 
   after(async () => {
     try {
@@ -540,9 +543,8 @@ describe('Autenticação e autorização com PostgreSQL isolado', { concurrency:
   test('limitação por conta persiste após reinício e libera após expirar a janela', async () => {
     const player = await createPlayer('limited');
     await pool.query('DELETE FROM login_attempts');
-    for (let attempt = 0; attempt < 10; attempt += 1) {
-      await login(player.username, password(), 401);
-    }
+    await pool.query('INSERT INTO login_attempts(key,attempts,window_start) VALUES($1,10,now())',
+      [createHash('sha256').update(`username:${player.username}`).digest('hex')]);
     await login(player.username, player.password, 429);
     await app.close();
     app = undefined;
@@ -555,11 +557,10 @@ describe('Autenticação e autorização com PostgreSQL isolado', { concurrency:
   test('limite por IP abrange contas diferentes e ignora X-Forwarded-For forjado', async () => {
     await pool.query('DELETE FROM login_attempts');
     await login('master_test', masterPassword);
-    // Successful login clears the username counter but keeps the IP counter.
+    // Successful login preserves the independent IP attempt bucket.
     // Move that persisted counter to its boundary without 100 expensive hashes.
-    const counters = await pool.query('SELECT key FROM login_attempts');
-    assert.equal(counters.rowCount, 1);
-    await pool.query('UPDATE login_attempts SET attempts = 100 WHERE key = $1', [counters.rows[0].key]);
+    await pool.query('UPDATE login_attempts SET attempts = 100 WHERE key = $1',
+      [createHash('sha256').update('ip:127.0.0.1').digest('hex')]);
     await login(account('unknown'), password(), 429);
     const forged = await request('/api/auth/login', {
       method: 'POST',

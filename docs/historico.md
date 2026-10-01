@@ -73,3 +73,18 @@ README reduzido a instalação e uso essencial, com detalhes preservados em `doc
 Implementado o primeiro master por `.env` privado e serviço temporário após migrações, com trava/transação compartilhadas pela alternativa interativa. Sem senha padrão, promoção de jogador ou redefinição de master existente. Senha literal com `$`, validação de aspas e recriação da montagem após edição atômica foram testadas e documentadas. Build/tipos, 65 testes API, regressão integrada Chromium e dois roteiros de primeiro boot isolados passaram. Backups anterior/final restaurados; todas as linhas do banco e arquivos pessoais preservados, sem gravar progresso de teste no ativo.
 
 O usuário autorizou expressamente o **primeiro commit local** do baseline funcional e desta melhoria, após revisão de todos os arquivos elegíveis e staged. Documentação privada original preservada em `.local`; fontes, licenças e reprodução do motor mantidas. Configuração/autor Git existentes preservados. Nenhuma autorização para push/publicação ou servidor. Resultados e limites estão em [validação](validacao.md#bootstrap-e-documentação-pública--30092026).
+
+## 30/09/2026 — melhorias acumuladas e fechamento
+
+| Etapa concluída | Resultado |
+| --- | --- |
+| Segurança | Bloqueio persistente após três falhas por IP, encaminhamento sanitizado e limites separados. Revisão SQL não identificou concatenação vulnerável |
+| Player | Tamanhos responsivos, botões sobrepostos, remapeamento e preferências locais por usuário |
+| Nativo e volume | Confirmação de sincronização antes de sair, orientação de SAVE/Continue e ganho de áudio real |
+| Reserva | Recuperação explícita após refresh, geração atômica e proteção de pendências da aba anterior |
+| Velocidade | 1×/2×/3×/5×/10× como alvo real, silêncio acima de 1× e timers de rede inalterados |
+| States/administração | Save rápido + três slots, cartucho consistente ao carregar, exclusão autorizada e backup v4; substitui restrições históricas a states/slots/administração |
+
+Contratos e motivos em [decisões](decisoes.md), [emulação](emulacao.md) e [saves](saves.md). Resultados reais e limitações de cada etapa permanecem em [validação](validacao.md), sem reapresentá-los como testes deste fechamento.
+
+Após avaliação positiva inicial dos states pelo usuário, autorizado commit local das melhorias acumuladas na branch atual. Fechamento restrito à revisão/documentação: guia organizado por tarefas, operação consolidada, preferência duradoura de documentação útil em AGENTS e [resumo de continuidade](desenvolvimento.md#continuidade--fechamento-de-30092026). Sem nova funcionalidade, manutenção de dados, push ou implantação remota.

@@ -1,6 +1,6 @@
 # Documentação do Emulador
 
-Aplicação local de GB/GBA com autenticação, usuários, temas, catálogo, emulação no navegador e save nativo. Nenhum jogo ou credencial acompanha o projeto.
+Aplicação local de GB/GBA com autenticação, usuários, temas, catálogo, emulação no navegador e saves nativos/estados. Nenhum jogo ou credencial acompanha o projeto.
 
 ## Começar e operar
 
@@ -16,6 +16,7 @@ Aplicação local de GB/GBA com autenticação, usuários, temas, catálogo, emu
 - [Autenticação e API](autenticacao.md): sessões, segurança, bootstrap e administração.
 - [Catálogo](catalogo.md): uploads, admissão GB/GBA, capas, disponibilidade e limites.
 - [Emulação e saves](emulacao.md): player, autorização, concorrência e recuperação.
+- [Saves nativos, states e administração](saves.md): slots, propriedade, exclusão, compatibilidade e limites.
 - [Motor e fontes](fontes-emulador.md): versões, licença, adaptação e build.
 - [Validação](validacao.md): comandos executados, resultados e limitações por etapa.
 - [Histórico técnico](historico.md): evolução da implementação e das decisões.

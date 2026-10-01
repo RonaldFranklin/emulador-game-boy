@@ -53,7 +53,7 @@ O login gera 32 bytes aleatórios de token, codificados em base64url. Apenas seu
 
 Login e operações que alteram dados usam bloqueios na linha do usuário. A senha e o bloqueio são conferidos novamente antes de criar uma sessão, impedindo que uma verificação Argon2 iniciada antes de uma redefinição ou bloqueio restaure acesso indevido. Operações autenticadas que alteram dados também conferem novamente a sessão e as permissões dentro da transação. A autorização não depende da interface.
 
-Registros vencidos de sessão e contadores com mais de um dia são limpos durante logins bem-sucedidos. Ainda não existe rotina agendada de limpeza. Não há limite próprio de dispositivos ou interface para listar sessões nesta entrega.
+Registros vencidos de sessão e contadores com mais de um dia e sem bloqueio vigente são limpos durante logins bem-sucedidos, em lotes de até 1000 linhas sem aguardar linhas ocupadas. Ainda não existe rotina agendada de limpeza. Não há limite próprio de dispositivos ou interface para listar sessões nesta entrega.
 
 ## Origem, CSRF e validação
 
@@ -70,11 +70,40 @@ DTOs validam tipos, tamanhos e formatos; campos extras são recusados. Identific
 
 ## Limitação de tentativas
 
-O banco mantém dois contadores por janela fixa de 15 minutos: até dez tentativas por nome de usuário e cem por IP. Tentativas válidas no formato contam antes de verificar a senha. Uma autenticação bem-sucedida limpa o contador do nome; o contador do IP permanece. A troca de senha também usa esses contadores. Respostas de excesso usam HTTP 429 e `Retry-After: 900`.
+A migração incremental `005-login-security.sql` acrescenta `failure_times` e `blocked_until` à tabela existente `login_attempts`, preservando contadores antigos. Não há Redis ou dependência nova. Chaves SHA-256 usam namespaces separados para cada política; IPs em texto não são persistidos nesses registros.
 
-Login com nome inexistente verifica um hash fictício e retorna a mesma mensagem usada para senha incorreta ou conta bloqueada. A limitação também é aplicada a nomes inexistentes. O contador do nome pode impedir temporariamente acesso legítimo após tentativas abusivas; recuperação automática ocorre ao renovar a janela.
+| Política | Limite e janela | Efeito |
+| --- | --- | --- |
+| Falhas de login por IP | Três falhas numa janela **móvel** de duas horas | Terceira falha inicia bloqueio de login por duas horas a partir dela |
+| Rajada de login por IP | 30 requisições em janela fixa de 60 segundos | 429 antes do parser/DTO/hash; inclui corpos malformados que passam pela validação de origem e tipo |
+| Tentativas por conta | Dez em janela fixa de 15 minutos, compartilhadas entre IPs | Login e troca de senha; antes de Argon2 |
+| Tentativas por IP | Cem em janela fixa de 15 minutos | Login e troca de senha; antes de Argon2 |
+| Requisições gerais por IP | 1200 em janela fixa de 60 segundos | Todas as rotas do backend após a validação de origem/tipo; não limita os assets estáticos do Vite |
+| Argon2 | Quatro operações simultâneas por processo | Contenção de memória já existente |
 
-`trust proxy` está desabilitado: cabeçalhos de IP enviados pelo cliente não são aceitos como identidade de rede. Com o proxy local do Vite, o backend pode observar o mesmo IP para vários clientes e compartilhar o limite de cem tentativas. Antes de uma implantação remota será necessário definir proxies confiáveis e validar limites adequados. Os limites não substituem proteção de rede e dimensionamento para uso público.
+Login com formato válido e conta inexistente, senha incorreta ou conta bloqueada conta como falha de autenticação. DTO inválido (400), origem inválida (403) ou contenção (429) não acrescentam falhas. Conta inexistente verifica hash fictício e recebe a mesma mensagem de credenciais inválidas. A terceira falha já retorna **429**, sem cookie, com mensagem em português e `Retry-After` inicialmente de **7200 segundos**. Novos nomes e senhas corretas também são recusados durante o bloqueio. Requisições recusadas não mudam `blocked_until`; o prazo restante diminui. Depois do vencimento, o histórico daquele IP recomeça vazio. Antes de um bloqueio, somente falhas ainda dentro da janela móvel são consideradas.
+
+Sucesso não apaga os contadores, nem as falhas anteriores do mesmo IP, de outras contas ou de outros IPs. Os contadores adicionais por conta/IP também passam a expirar pela janela, sem limpeza por sucesso. Isso pode limitar logins e trocas de senha repetidos mesmo com credenciais corretas. HTTP 429 informa o prazo restante do limite que recusou a requisição. Uma tentativa simultânea do mesmo IP recebe 429 com `Retry-After: 1`; deve ser repetida após a tentativa em andamento terminar. Rajadas podem receber o prazo menor da política de rajada antes da consulta ao bloqueio de duas horas, sem alterar esse bloqueio.
+
+Uma trava consultiva transacional PostgreSQL por IP é adquirida **sem espera**, antes do hash. Ela cobre leitura das falhas, verificação de senha, revalidação da conta e criação de sessão/registro da falha. Falhas são confirmadas no banco antes de enviar o erro HTTP. Duas instâncias da API compartilham a trava; requisições paralelas não verificam senhas além do limite. Relógio do banco determina os prazos. Reiniciar/recriar a API não limpa os registros. Falha de banco não libera login.
+
+O bloqueio de duas horas atua somente em login. Não revoga sessões nem bloqueia biblioteca, ROM, heartbeat ou saves de sessões existentes. O limite geral é separado: comporta a biblioteca de até 1000 capas numa carga, heartbeat a cada 30 segundos e sincronização usual do player. Permanecem o intervalo mínimo de um segundo entre alterações de save, repetição idempotente e as quotas de upload/save. O limite geral também é compartilhado por clientes sob o mesmo IP; recarregamentos repetidos ou abuso podem esgotá-lo temporariamente, sem revogar sessões.
+
+### Identificação do IP
+
+Cadeia local: navegador → porta loopback Docker → **Vite** → backend na rede privada. Vite remove `Forwarded`, `X-Forwarded-For`, `X-Forwarded-Host`, `X-Forwarded-Proto` e `X-Real-IP` recebidos e escreve um único `X-Forwarded-For` com o endereço válido de seu socket. Não concatena cabeçalhos enviados pelo navegador.
+
+O backend mantém `trust proxy=false`. Somente o serviço `backend` do Compose recebe `TRUSTED_PROXY_HOST=frontend`. A cada requisição, ele resolve esse nome na rede Docker e compara os endereços exatos com o peer do socket; aceita o IP encaminhado apenas quando esse peer corresponde ao serviço confiável. Outros peers usam seu próprio socket e ignoram todos os cabeçalhos de encaminhamento. Não se confia na rede privada inteira nem em quantidade irrestrita de saltos. Um proxy reconhecido sem IP único válido, ou falha de resolução, recebe erro genérico 503. A rota `/api/health` sempre usa o socket direto, permitindo o healthcheck inicial antes de existir o frontend (que depende da API saudável).
+
+IPv4 mapeado em IPv6 é convertido para IPv4; IPv6 é canonizado. Listas, portas, texto inválido e identificadores de zona não são aceitos como IP encaminhado. A configuração sem `TRUSTED_PROXY_HOST` é apropriada para execução direta; não habilita encaminhamento. Recriação do frontend é acompanhada pela resolução de DNS, sem manter confiança em um IP antigo.
+
+Docker Desktop/WSL, NAT e proxies anteriores ao Vite podem apresentar vários clientes com o mesmo endereço de socket. Nesse caso, eles compartilham o bloqueio; não é seguro recuperar IPs originais a partir de cabeçalhos não confiáveis. Clientes que chegam ao Vite com sockets de IPs distintos permanecem distintos no backend, sem serem agrupados pelo IP do container Vite. Bloqueio por IP reduz abuso, mas não impede bots distribuídos por múltiplos IPs. O ambiente continua local, sem exposição externa.
+
+### Revisão de SQL
+
+Revisadas consultas alcançáveis por login/sessão, usuários, catálogo/capas, ROMs, reservas e saves. Valores usam parâmetros `$1…$n` de `pg`, incluindo nomes, hashes, UUIDs, booleanos e bytes. Ordenação e filtros SQL são fixos; parâmetros de URL desconhecidos não viram fragmentos SQL. Não foram encontradas concatenações vulneráveis de dados de requisição nesta revisão. Não foi adicionada blacklist nem escape manual. Nomes de jogos e bytes de saves preservam texto com sintaxe SQL como dados; identificadores inválidos são recusados pelo contrato existente. Papel limitado do banco e respostas genéricas sem SQL/segredos permanecem.
+
+Referências técnicas: [Express e proxies confiáveis](https://expressjs.com/en/guide/behind-proxies/), [consultas parametrizadas do pg](https://node-postgres.com/features/queries) e [travas consultivas PostgreSQL](https://www.postgresql.org/docs/18/explicit-locking.html#ADVISORY-LOCKS).
 
 ## Contrato HTTP
 

@@ -80,9 +80,11 @@ test('migração 002 → 003 preserva catálogo GB populado, identidade, arquivo
     assert.deepEqual((await pool.query('SELECT * FROM sessions ORDER BY token_hash')).rows, oldSessions);
     const migrations = (await pool.query('SELECT * FROM schema_migrations ORDER BY name')).rows;
     assert.deepEqual(migrations.slice(0, 2), oldMigrations);
-    assert.equal(migrations.length, 4);
+    assert.equal(migrations.length, 6);
     assert.equal(migrations[2].name, '003-catalog-consoles.sql');
     assert.equal(migrations[3].name, '004-play-saves.sql');
+    assert.equal(migrations[4].name, '005-login-security.sql');
+    assert.equal(migrations[5].name, '006-save-states.sql');
     for (const file of files) assert.deepEqual(await readFile(file.path), file.bytes);
     await assert.rejects(pool.query("UPDATE games SET console='GBA' WHERE id=$1", [newGames[0].id]),
       (error) => error.code === 'P0001');

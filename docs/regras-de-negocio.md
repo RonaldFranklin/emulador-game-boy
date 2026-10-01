@@ -11,6 +11,7 @@ Estado: contas, acesso, temas, catálogo GB/GBA, emulação e save nativo implem
 - Master administra as contas que podem acessar o sistema, incluindo criação e bloqueio.
 - Autorização deve ocorrer no backend em cada operação; esconder botões não é proteção suficiente.
 - Identificador: 3–32 caracteres, letras minúsculas ASCII, números e sublinhado. Senha nova de 12–128 caracteres, sem remoção de espaços. Login e confirmação da senha atual aceitam credenciais existentes não vazias até 128 caracteres, inclusive hashes de senhas curtas; criação, redefinição, bootstrap e nova senha mantêm o mínimo de 12.
+- Três falhas de login do mesmo IP em duas horas bloqueiam novos logins desse IP por duas horas desde a terceira falha, para qualquer nome. Sucesso não limpa falhas; tentativas bloqueadas não estendem o prazo. Sessões existentes continuam válidas. IP compartilhado por NAT pode compartilhar bloqueio; limites adicionais estão em [autenticação](autenticacao.md#limitação-de-tentativas).
 - Sem cadastro público. O primeiro master é criado pelo bootstrap local após as migrações, usando credenciais escolhidas no `.env` privado, ou pelo comando interativo com senha oculta e confirmação. Não há senha padrão; master existente nunca é redefinido pelo bootstrap. Credenciais inválidas ou ausentes sem master impedem a inicialização.
 - Master cria somente jogadores. Criação e redefinição exigem troca da senha temporária antes de usar biblioteca/administração.
 - Jogador e master trocam a própria senha informando a atual. A troca revoga todas as sessões da conta. Logout revoga somente a sessão corrente.
@@ -34,16 +35,16 @@ Estado: contas, acesso, temas, catálogo GB/GBA, emulação e save nativo implem
 
 ## Saves
 
-- Um único save ativo por usuário e jogo.
+- Um único save nativo por usuário/jogo, mais um Save rápido e três slots manuais de state.
 - Progresso criado dentro da emulação; sem importação de save externo.
-- Não apresentar múltiplos slots como funcionalidade aprovada.
-- Cada perfil acessa somente seu próprio progresso no player. Painel de administração/exclusão de saves está fora desta entrega.
+- Os quatro slots de state foram expressamente aprovados; não há slots adicionais nem importação/exportação.
+- Cada perfil carrega somente seu próprio progresso no player. MASTER lista/filtra/exclui saves alheios em administração separada, com confirmação de dono/jogo/tipo; essa permissão não dá acesso para jogar usando dados de outra conta.
 - Proteger progresso contra sobrescritas silenciosas de outro aparelho e gravações interrompidas.
 - Diferenciar confirmação local de confirmação de persistência no servidor.
 - Save nativo de cartucho restaurado antes do primeiro frame e sincronizado por alterações; não é save state. Reserva exclusiva, versão esperada e repetição idempotente protegem duas abas/dispositivos.
-- Cópia pendente no IndexedDB por usuário/jogo protege erros de rede; sai apenas após confirmação ou descarte explícito por conflito. Commit com resposta perdida mantém também o snapshot sucessor, sem expor slots ao usuário. Não há histórico remoto de versões recuperáveis.
+- Cópia pendente no IndexedDB por usuário/jogo protege erros de rede; sai apenas após confirmação ou descarte explícito por conflito. Commit com resposta perdida mantém também o snapshot sucessor, independentemente dos slots de state. Revisões substituídas de um mesmo slot não têm histórico recuperável.
 - Exportação de saves não faz parte do escopo confirmado.
-- Política de exclusão de jogos, contas e saves e confirmação de ações destrutivas devem ser detalhadas antes de implementação.
+- Exclusão nativa exige digitar EXCLUIR, versão/identidade atuais e ausência de reserva ativa; marcadores persistentes impedem restauração silenciosa por pendências antigas. Excluir slot não exclui nativo, ROM, conta ou outros slots. Contrato em [saves](saves.md).
 
 ## Visitante
 Possibilidade futura, fora da primeira entrega: testar jogos sem conta e eventualmente com limite de tempo. Não prometer limite inviolável em emulação executada no cliente. Catálogo, duração e persistência do visitante ainda não definidos.

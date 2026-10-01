@@ -1,7 +1,8 @@
 import { test, expect } from '@playwright/test';
 import { createServer as createViteServer } from 'vite';
 import { createServer } from 'node:net';
-import { randomBytes } from 'node:crypto';
+import { request as httpRequest } from 'node:http';
+import { createHash, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -22,6 +23,7 @@ const personal = randomBytes(24).toString('base64url');
 const resetTemporary = randomBytes(24).toString('base64url');
 const resetPersonal = randomBytes(24).toString('base64url');
 const originalEnvironment = {
+  TRUSTED_PROXY_HOST: process.env.TRUSTED_PROXY_HOST,
   PGDATABASE: process.env.PGDATABASE,
   APP_ORIGIN: process.env.APP_ORIGIN,
   API_PROXY_TARGET: process.env.API_PROXY_TARGET,
@@ -91,6 +93,7 @@ test.beforeAll(async () => {
   const migrationPool = new pg.Pool({ ...databaseConfig(), database });
   try { await migrate(migrationPool); } finally { await migrationPool.end(); }
   process.env.PGDATABASE = database;
+  process.env.TRUSTED_PROXY_HOST = 'localhost';
   storageDirectory = await mkdtemp(join(tmpdir(), 'emulador-application-catalog-'));
   process.env.CATALOG_STORAGE_DIR = storageDirectory;
   await bootstrap();
@@ -227,4 +230,43 @@ test('desktop e celular: bootstrap sem eco, administração, revogação e sess�
     await mobileContext.close();
   }
   expect(errors).toEqual([]);
+});
+
+
+test('login 429 aparece na UI; Vite sanitiza spoofing e distingue sockets clientes', async ({ page, browser }) => {
+  const pool = new pg.Pool(databaseConfig());
+  const anonymous = await browser.newContext();
+  try {
+    await pool.query('DELETE FROM login_attempts'); // Only this suite's random DB.
+    await page.goto(origin);
+    await login(page, master, password);
+    await expect(page.getByRole('heading', { name: 'Biblioteca', exact: true })).toBeVisible();
+    const blockedPage = await anonymous.newPage();
+    await blockedPage.goto(origin);
+    for (let i = 0; i < 3; i++) {
+      await anonymous.setExtraHTTPHeaders({ 'X-Forwarded-For': `203.0.113.${i+1}`, Forwarded: 'for=192.0.2.1', 'X-Real-IP': '198.51.100.1' });
+      const pending = blockedPage.waitForResponse(r => r.url().endsWith('/api/auth/login'));
+      await login(blockedPage, `missing_${i}`, 'incorrect_password');
+      const result = await pending;
+      expect(result.status()).toBe(i === 2 ? 429 : 401);
+      if (i === 2) expect(result.headers()['retry-after']).toBe('7200');
+    }
+    await expect(blockedPage.getByRole('alert')).toContainText('Login temporariamente bloqueado para este IP');
+    expect(await page.evaluate(async () => (await fetch('/api/auth/me')).status)).toBe(200);
+    const different = await new Promise((resolve, reject) => {
+      const req = httpRequest(`${origin}/api/auth/login`, { method: 'POST', localAddress: '127.0.0.2', headers: {
+        Origin: origin, 'X-Requested-With': 'XMLHttpRequest', 'Content-Type': 'application/json',
+        'X-Forwarded-For': '127.0.0.1', Forwarded: 'for=127.0.0.1',
+      } }, res => { res.resume(); res.on('end', () => resolve(res.statusCode)); });
+      req.on('error', reject); req.end(JSON.stringify({ username: master, password }));
+    });
+    expect(different).toBe(200);
+    const hash = text => createHash('sha256').update(text).digest('hex');
+    const rows = await pool.query('SELECT key,cardinality(failure_times) AS failures FROM login_attempts WHERE key=ANY($1)',
+      [[hash('login-failures:127.0.0.1'), hash('login-failures:127.0.0.2')]]);
+    expect(rows.rows).toEqual(expect.arrayContaining([
+      { key: hash('login-failures:127.0.0.1'), failures: 3 },
+      { key: hash('login-failures:127.0.0.2'), failures: 0 },
+    ]));
+  } finally { await anonymous.close(); await pool.end(); }
 });

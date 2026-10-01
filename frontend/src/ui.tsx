@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useId } from 'react';
 import type { ReactNode } from 'react';
 
 export function Icon({ name, size = 20 }: { name: 'game' | 'catalogue' | 'users' | 'lock' | 'exit' | 'arrow' | 'plus' | 'close'; size?: number }) {
@@ -42,14 +42,15 @@ export function PasswordFields({ password, confirmation, onPassword, onConfirmat
 }
 
 export function Dialog({ title, busy, onDismiss, children }: { title: string; busy: boolean; onDismiss: () => void; children: ReactNode }) {
+  const titleId=useId();
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     const dialog = ref.current;
     dialog?.showModal();
     return () => dialog?.close();
   }, []);
-  return <dialog ref={ref} className="dialog" aria-labelledby="dialog-title" onCancel={(event) => { event.preventDefault(); if (!busy) onDismiss(); }}>
-    <div className="dialog-heading"><h2 id="dialog-title">{title}</h2><button type="button" className="icon-button" aria-label="Fechar janela" onClick={onDismiss} disabled={busy}><Icon name="close" /></button></div>
+  return <dialog ref={ref} className="dialog" aria-labelledby={titleId} onCancel={(event) => { event.preventDefault(); if (!busy) onDismiss(); }}>
+    <div className="dialog-heading"><h2 id={titleId}>{title}</h2><button type="button" className="icon-button" aria-label="Fechar janela" onClick={onDismiss} disabled={busy}><Icon name="close" /></button></div>
     {children}
   </dialog>;
 }

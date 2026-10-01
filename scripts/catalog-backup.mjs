@@ -34,7 +34,11 @@ const lockCode = `
     const hasSaves = (await client.query("SELECT to_regclass('public.game_saves') IS NOT NULL AS present")).rows[0].present;
     const saves = hasSaves ? (await client.query('SELECT user_id, game_id, sha256, size, version FROM game_saves ORDER BY user_id, game_id')).rows : [];
     if (hasSaves && (await client.query("SELECT 1 FROM game_saves WHERE size <> octet_length(data) OR sha256 <> encode(sha256(data), 'hex') LIMIT 1")).rowCount) throw new Error('Invalid savedata integrity');
-    process.stdout.write(JSON.stringify({ saves, database: process.env.PGDATABASE, storagePath: present ? process.env.CATALOG_STORAGE_DIR : null, hasCatalog: present, games: rows }) + '\\n');
+    const hasStates = (await client.query("SELECT to_regclass('public.save_states') IS NOT NULL AS present")).rows[0].present;
+    const states = hasStates ? (await client.query('SELECT user_id,game_id,slot,version,label,console,rom_sha256,core_id,format,sha256,native_sha256,octet_length(data) AS size,octet_length(native) AS native_size FROM save_states WHERE data IS NOT NULL ORDER BY user_id,game_id,slot')).rows : [];
+    const resets = hasStates ? (await client.query('SELECT user_id,game_id,epoch FROM save_resets ORDER BY user_id,game_id')).rows : [];
+    if (hasStates && (await client.query("SELECT 1 FROM save_states WHERE data IS NOT NULL AND (sha256 <> encode(sha256(data),'hex') OR native_sha256 <> encode(sha256(native),'hex')) LIMIT 1")).rowCount) throw new Error('Invalid state integrity');
+    process.stdout.write(JSON.stringify({ states, resets, saves, database: process.env.PGDATABASE, storagePath: present ? process.env.CATALOG_STORAGE_DIR : null, hasCatalog: present, games: rows }) + '\\n');
     for await (const chunk of process.stdin) { if (chunk.length) break; }
   } catch { process.stderr.write('Não foi possível manter a trava de backup do catálogo.\\n'); process.exitCode = 1; }
   finally { clearTimeout(timer); await client.end(); }
@@ -125,7 +129,7 @@ export async function createCatalogueBackup({ backendContainer, databaseContaine
   const lock = await lockCatalogue(backendContainer);
   let manifest;
   try {
-    const { database, storagePath, hasCatalog, games, saves } = lock.snapshot;
+    const { database, storagePath, hasCatalog, games, saves, states, resets } = lock.snapshot;
     if (!database || (hasCatalog && !storagePath?.startsWith('/'))) throw new Error('Configuração do backend incompleta para backup.');
     const dump = await open(join(outputPath, 'database.dump'), 'wx', 0o600);
     try {
@@ -150,7 +154,8 @@ export async function createCatalogueBackup({ backendContainer, databaseContaine
     }
     verifyReferences(games, files);
     verifySaveMetadata(saves, games);
-    manifest = { version: 3, saves, createdAt: new Date().toISOString(), sourceDatabase: database, games, files };
+    verifyStateMetadata(states,games);
+    manifest = { version: 4, states, resets, saves, createdAt: new Date().toISOString(), sourceDatabase: database, games, files };
     lock.assertHeld();
   } finally { await lock.release(); }
   // Manifest is the completion marker: incomplete bundles cannot restore.
@@ -171,7 +176,7 @@ export async function verifyCatalogueBackup(directory) {
     throw new Error('Checksum do manifesto inválido.');
   }
   const manifest = JSON.parse(await readFile(join(root, 'manifest.json'), 'utf8'));
-  if (![1, 2, 3].includes(manifest.version) || !Array.isArray(manifest.files) || manifest.files.length > 10001) throw new Error('Formato de backup não suportado.');
+  if (![1, 2, 3, 4].includes(manifest.version) || !Array.isArray(manifest.files) || manifest.files.length > 10001) throw new Error('Formato de backup não suportado.');
   const expected = ['database.dump', ...(await assetFiles(join(root, 'files'))).map((path) => `files/${path}`)].sort();
   const actual = manifest.files.map((file) => file.path).sort();
   if (JSON.stringify(expected) !== JSON.stringify(actual)) throw new Error('Lista de arquivos diverge do manifesto.');
@@ -185,6 +190,7 @@ export async function verifyCatalogueBackup(directory) {
   if (manifest.version === 1 && manifest.files.some((file) => file.path.endsWith('.gba'))) throw new Error('Backup v1 aceita somente ROMs GB.');
   verifyReferences(normalizeGames(manifest.games, manifest.version), manifest.files);
   verifySaveMetadata(manifest.version >= 3 ? manifest.saves : [], manifest.games);
+  verifyStateMetadata(manifest.version >= 4 ? manifest.states : [], manifest.games);
   return manifest;
 }
 
@@ -202,4 +208,15 @@ export function verifySaveMetadata(saves, games) {
     seen.add(key); bytes += save.size;
   }
   if (bytes > 1024 ** 3) throw new Error('Quota de saves excedida no backup.');
+}
+
+export function verifyStateMetadata(states, games) {
+ if(!Array.isArray(states)||states.length>10000)throw Error('Lista de estados inválida.');
+ const seen=new Set(),owners=new Map();let total=0;
+ for(const state of states){
+  const game=games.find(g=>g.id===state.game_id),key=`${state.user_id}:${state.game_id}:${state.slot}`;
+  if(!new RegExp(`^${uuid}$`).test(state.user_id)||!game||seen.has(key)||![0,1,2,3].includes(state.slot)||!Number.isInteger(state.version)||state.version<1||state.format!==1||state.console!==game.console||state.rom_sha256!==game.rom_sha256||!/^wasm:[a-f0-9]{64}$/.test(state.core_id)||!Number.isInteger(state.size)||state.size!==(state.console==='GB'?71680:397312)||!Number.isInteger(state.native_size)||state.native_size<0||state.native_size>1048576||!/^[a-f0-9]{64}$/.test(state.sha256)||!/^[a-f0-9]{64}$/.test(state.native_sha256))throw Error('Metadados de estado inválidos.');
+  seen.add(key);const bytes=state.size+state.native_size;total+=bytes;owners.set(state.user_id,(owners.get(state.user_id)??0)+bytes);
+ }
+ if(total>256*1024**2||[...owners.values()].some(n=>n>32*1024**2))throw Error('Quota de estados excedida no backup.');
 }

@@ -1,6 +1,6 @@
 # Emulador Game Boy
 
-Aplicação web para **Game Boy (GB) e Game Boy Advance (GBA)**, com interface em português, temas claro/escuro e controles de teclado/toque. Inclui login, administração de jogadores, catálogo e emulação no navegador, com um save nativo por usuário/jogo.
+Aplicação web para **Game Boy (GB) e Game Boy Advance (GBA)**, com interface em português, temas claro/escuro e controles de teclado/toque. Inclui login, administração de jogadores, catálogo e emulação no navegador, com um save nativo e quatro pontos de save state por usuário/jogo.
 
 O catálogo começa vazio. Nenhum jogo, BIOS externa ou save pessoal acompanha o projeto. O master cadastra suas ROMs e capas; jogadores acessam os jogos ativos. Não há cadastro público, login social ou senha padrão.
 
@@ -69,12 +69,9 @@ As credenciais são lidas diretamente do arquivo pelo serviço temporário de bo
 
 ## Usar a aplicação
 
-- **Administração:** o master cria jogadores com senha temporária, bloqueia/desbloqueia e redefine senhas. O jogador troca a temporária antes de acessar jogos.
-- **Catálogo:** o master cadastra nome, `.gb`/`.gba`, capa opcional e disponibilidade. A ROM e o console são imutáveis.
-- **Jogar:** escolha um jogo ativo, inicie e salve pelo menu do próprio jogo. Aguarde **Salvo no servidor** e use **Salvar e voltar** antes de trocar de aparelho.
-- **Controles:** setas, A/B em X/Z, Start/Select em Enter/Shift; L/R do GBA em Q/W. Há controles de toque, pausa, áudio e tela cheia.
+O [guia de uso](docs/guia-de-uso.md) traz os passos para salvar no jogo e continuar, criar/carregar Save rápido e três slots manuais, gerenciar **Meus saves**, recuperar uma reserva após Ctrl+R e resolver pendências. Também explica controles, tamanho, volume e velocidade.
 
-O progresso é memória nativa de cartucho, **não save state**. Uma reserva evita gravação simultânea do mesmo usuário/jogo. Falhas de rede deixam uma cópia pendente por conta/jogo no navegador; não limpe seus dados enquanto houver pendência. Detalhes, limites de upload e solução de conflitos no [guia de uso](docs/guia-de-uso.md).
+**Salvar e voltar** sincroniza o cartucho; **Saves** guarda o instante exato. Carregar um estado antigo também restaura o cartucho daquele ponto. MASTER administra contas, catálogo e exclusão de saves em área separada, mas só joga com o próprio progresso.
 
 ## Operação e backup
 
@@ -92,15 +89,15 @@ npm run restore:verify -- .local/backups/PASTA
 
 Substitua `PASTA` pelo destino impresso pelo backup. Contas/saves ficam no PostgreSQL; ROMs/capas, em volume privado. Guarde a **pasta completa** de backup. Nunca use `docker compose down -v` ou remova volumes para reiniciar a aplicação.
 
-[Operação, migrações, persistência, restauração e testes](docs/operacao.md) descreve os comandos completos, inclusive recuperação em novo banco/volume e bootstrap interativo alternativo. Faça backup verificado antes de atualizar uma instalação existente.
+[Operação, migrações, persistência, restauração e testes](docs/operacao.md) descreve os comandos completos, inclusive recuperação em novo banco/volume e bootstrap interativo alternativo. Faça backup verificado antes de migrações ou manutenção de dados; atualização só de frontend não exige backup completo por rotina.
 
 ## Limites e documentação
 
-Não há importação/exportação de saves, slots extras, administração de saves, exclusão definitiva de jogos ou recuperação pública de senha. GBC exclusivo e outros consoles estão fora. ROMs chegam necessariamente ao navegador autorizado: não há promessa de DRM. Compatibilidade completa, aparelhos físicos e outros navegadores ainda precisam de testes.
+Não há importação/exportação de saves, slots além dos quatro aprovados, exclusão definitiva de jogos ou recuperação pública de senha. GBC exclusivo e outros consoles estão fora. ROMs chegam necessariamente ao navegador autorizado: não há promessa de DRM. Compatibilidade completa, aparelhos físicos e outros navegadores ainda precisam de testes.
 
 O núcleo mGBA usa commit de desenvolvimento fixado e fontes verificadas, com licença e código correspondente disponíveis na própria aplicação. Veja [fontes do motor](docs/fontes-emulador.md).
 
-A etapa anterior registrou **57 testes de API e 49 cenários Chromium aprovados**, além de restauração real de saves GB/GBA. Esses resultados são históricos; a validação da mudança de bootstrap está separada em [evidências](docs/validacao.md).
+Resultados e limitações de cada entrega estão em [validação](docs/validacao.md); são evidências históricas, não testes novos deste fechamento.
 
 - [Índice da documentação](docs/README.md)
 - [Guia de uso](docs/guia-de-uso.md)
