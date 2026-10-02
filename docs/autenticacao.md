@@ -27,7 +27,7 @@ Senhas são armazenadas somente como hashes Argon2id, com sal aleatório gerado 
 
 O primeiro `MASTER` é criado pelo serviço temporário `bootstrap` do Compose, após as migrações. Ele executa `bootstrap-master-env.js` (também disponível como `npm run bootstrap:env --workspace backend`) e lê `ADMIN_USERNAME`/`ADMIN_PASSWORD` de um arquivo montado como secret somente leitura, normalmente `.env`. `node:util.parseEnv` interpreta o arquivo sem executar seu conteúdo; as credenciais não são variáveis de ambiente do container nem argumentos. Sem master, dados ausentes, parciais ou inválidos causam falha; com master existente, o bootstrap termina sem alterar a conta. As validações de tamanho e formato são as mesmas exigidas de novas credenciais. A senha configurada deve ocupar uma linha entre aspas simples, sem apóstrofo interno nem barra invertida final; valores ambíguos e chaves duplicadas são recusados. `$`, `#`, espaços, Unicode, aspas duplas e barras invertidas internas são literais. Senhas com apóstrofo ou barra invertida final podem ser definidas pela alternativa interativa.
 
-`BOOTSTRAP_ENV_SOURCE` seleciona o arquivo, com `./.env` definido pelo exemplo/setup. Se esse seletor estiver ausente ou vazio, o Compose usa `.env.example`, sem credenciais; master existente continua preservado sem ler credenciais. O setup acrescenta o seletor a configurações legadas quando ausente. O `.env` real tem permissão `0600`. Somente o container temporário de bootstrap usa UID root para ler o secret independentemente do UID do host; seu papel de banco continua limitado ao da aplicação. Backend e frontend permanecem sem root. Depois de confirmar o primeiro login, os campos `ADMIN_*` podem ser esvaziados.
+`BOOTSTRAP_ENV_SOURCE` seleciona o arquivo, com `./.env` definido pelo exemplo/setup. Se esse seletor estiver ausente ou vazio, o Compose usa `.env.example`, sem credenciais; master existente continua preservado sem ler credenciais. O setup acrescenta o seletor a configurações legadas quando ausente. O `.env` real tem permissão `0600`. Somente o container temporário de bootstrap usa UID root para ler o secret independentemente do UID do host; seu papel de banco é o migrador `emulador`, separado do runtime da API. Backend e frontend permanecem sem root. Depois de confirmar o primeiro login, os campos `ADMIN_*` podem ser esvaziados.
 
 A alternativa `npm run bootstrap:master --workspace backend` exige terminal TTY, recusa argumentos e solicita nome, senha sem eco e confirmação. Esse comando não recebe senha por variável de ambiente. Os dois caminhos compartilham a criação transacional com bloqueio consultivo e verificação de master existente; execuções concorrentes não criam dois masters. Procedimentos em [operação](operacao.md#primeiro-master-e-segredos-locais).
 
@@ -39,7 +39,7 @@ A redefinição administrativa exige nova senha temporária escolhida pelo maste
 
 ## Sessões e revogação
 
-O login gera 32 bytes aleatórios de token, codificados em base64url. Apenas seu hash SHA-256 vai para o banco. O navegador recebe `emulador_session`, cookie `HttpOnly`, `SameSite=Strict`, caminho `/api`, sem atributo `Domain`. O prazo é absoluto, sem renovação a cada acesso: 168 horas por padrão, configurável por `SESSION_TTL_HOURS` entre 1 e 720.
+O login gera 32 bytes aleatórios de token, codificados em base64url. Apenas seu hash SHA-256 vai para o banco. O navegador recebe `emulador_session`, cookie `HttpOnly`, `SameSite=Strict`, caminho `/api`, sem atributo `Domain`. Para jogadores, o prazo é absoluto, sem renovação a cada acesso: 168 horas por padrão, configurável por `SESSION_TTL_HOURS` entre 1 e 720. MASTER segue os prazos de MFA abaixo.
 
 `COOKIE_SECURE=false` existe para o HTTP local em loopback. Uma configuração de origem HTTPS exige `COOKIE_SECURE=true`; este Compose não constitui uma implantação HTTPS. O cookie persiste no navegador e a sessão persiste no PostgreSQL, permitindo continuidade após reinício da API.
 
@@ -53,7 +53,7 @@ O login gera 32 bytes aleatórios de token, codificados em base64url. Apenas seu
 
 Login e operações que alteram dados usam bloqueios na linha do usuário. A senha e o bloqueio são conferidos novamente antes de criar uma sessão, impedindo que uma verificação Argon2 iniciada antes de uma redefinição ou bloqueio restaure acesso indevido. Operações autenticadas que alteram dados também conferem novamente a sessão e as permissões dentro da transação. A autorização não depende da interface.
 
-Registros vencidos de sessão e contadores com mais de um dia e sem bloqueio vigente são limpos durante logins bem-sucedidos, em lotes de até 1000 linhas sem aguardar linhas ocupadas. Ainda não existe rotina agendada de limpeza. Não há limite próprio de dispositivos ou interface para listar sessões nesta entrega.
+Registros vencidos são limpos na inicialização e periodicamente, independentemente de login; retenção e limites em [segurança](seguranca.md#resistência-a-abuso). Não há interface de listagem de dispositivos nesta entrega.
 
 ## Origem, CSRF e validação
 
@@ -68,26 +68,17 @@ As operações autenticadas que alteram dados também exigem `X-CSRF-Token`. O l
 
 DTOs validam tipos, tamanhos e formatos; campos extras são recusados. Identificadores de usuários em URLs devem ser UUID v4. O corpo JSON das rotas gerais tem limite de 16 KiB; o envio de save tem limite próprio descrito em [emulação](emulacao.md). Erros não retornam hashes, senhas, SQL, argumentos de consulta ou stack trace. Respostas da API usam `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` e política CSP restrita.
 
+## Segundo fator do master
+
+MASTER exige matrícula/confirmação TOTP antes de usar a aplicação. `mfa` nas respostas de login/me indica `enroll`, `verify`, `verified` ou `not-required` (jogador). Sessões MASTER têm TTL/inatividade próprios e administração exige confirmação recente; jogadores preservam o TTL geral. Fluxo, limites e proteção dos segredos em [segurança](seguranca.md#master-mfa-e-sessão); instruções humanas no [guia](guia-de-uso.md#segurança-do-master).
+
+POSTs de MFA exigem cookie, origem/AJAX e CSRF: `/api/auth/mfa/enroll` recebe `{password}`; `/confirm` e `/verify`, `{code}`; `/reauth` e `/replace`, `{password,code}`. Cadastro/substituição retornam chave/URI temporárias; confirmação retorna códigos de recuperação uma vez. Verificação/reauth/cadastro concluído giram sessão e CSRF. HTTP 403 com `MFA_REQUIRED` restringe pré-autenticação; `MFA_REAUTH_REQUIRED` pede senha **e** segundo fator, nunca apenas senha. Rotas administrativas revalidam a condição na transação, além do guard.
+
 ## Limitação de tentativas
 
-A migração incremental `005-login-security.sql` acrescenta `failure_times` e `blocked_until` à tabela existente `login_attempts`, preservando contadores antigos. Não há Redis ou dependência nova. Chaves SHA-256 usam namespaces separados para cada política; IPs em texto não são persistidos nesses registros.
+Três falhas de autenticação por IP em janela móvel de duas horas bloqueiam novos logins por duas horas desde a terceira falha. Sucesso não apaga falhas; requisições durante o bloqueio não estendem o prazo. Depois de expirar, a contagem recomeça. Sessões existentes continuam válidas. Uma trava transacional PostgreSQL por IP recusa concorrência antes do hash; falhas são confirmadas antes da resposta. Conta inexistente usa hash fictício e recebe mensagem genérica. HTTP 429 informa `Retry-After`.
 
-| Política | Limite e janela | Efeito |
-| --- | --- | --- |
-| Falhas de login por IP | Três falhas numa janela **móvel** de duas horas | Terceira falha inicia bloqueio de login por duas horas a partir dela |
-| Rajada de login por IP | 30 requisições em janela fixa de 60 segundos | 429 antes do parser/DTO/hash; inclui corpos malformados que passam pela validação de origem e tipo |
-| Tentativas por conta | Dez em janela fixa de 15 minutos, compartilhadas entre IPs | Login e troca de senha; antes de Argon2 |
-| Tentativas por IP | Cem em janela fixa de 15 minutos | Login e troca de senha; antes de Argon2 |
-| Requisições gerais por IP | 1200 em janela fixa de 60 segundos | Todas as rotas do backend após a validação de origem/tipo; não limita os assets estáticos do Vite |
-| Argon2 | Quatro operações simultâneas por processo | Contenção de memória já existente |
-
-Login com formato válido e conta inexistente, senha incorreta ou conta bloqueada conta como falha de autenticação. DTO inválido (400), origem inválida (403) ou contenção (429) não acrescentam falhas. Conta inexistente verifica hash fictício e recebe a mesma mensagem de credenciais inválidas. A terceira falha já retorna **429**, sem cookie, com mensagem em português e `Retry-After` inicialmente de **7200 segundos**. Novos nomes e senhas corretas também são recusados durante o bloqueio. Requisições recusadas não mudam `blocked_until`; o prazo restante diminui. Depois do vencimento, o histórico daquele IP recomeça vazio. Antes de um bloqueio, somente falhas ainda dentro da janela móvel são consideradas.
-
-Sucesso não apaga os contadores, nem as falhas anteriores do mesmo IP, de outras contas ou de outros IPs. Os contadores adicionais por conta/IP também passam a expirar pela janela, sem limpeza por sucesso. Isso pode limitar logins e trocas de senha repetidos mesmo com credenciais corretas. HTTP 429 informa o prazo restante do limite que recusou a requisição. Uma tentativa simultânea do mesmo IP recebe 429 com `Retry-After: 1`; deve ser repetida após a tentativa em andamento terminar. Rajadas podem receber o prazo menor da política de rajada antes da consulta ao bloqueio de duas horas, sem alterar esse bloqueio.
-
-Uma trava consultiva transacional PostgreSQL por IP é adquirida **sem espera**, antes do hash. Ela cobre leitura das falhas, verificação de senha, revalidação da conta e criação de sessão/registro da falha. Falhas são confirmadas no banco antes de enviar o erro HTTP. Duas instâncias da API compartilham a trava; requisições paralelas não verificam senhas além do limite. Relógio do banco determina os prazos. Reiniciar/recriar a API não limpa os registros. Falha de banco não libera login.
-
-O bloqueio de duas horas atua somente em login. Não revoga sessões nem bloqueia biblioteca, ROM, heartbeat ou saves de sessões existentes. O limite geral é separado: comporta a biblioteca de até 1000 capas numa carga, heartbeat a cada 30 segundos e sincronização usual do player. Permanecem o intervalo mínimo de um segundo entre alterações de save, repetição idempotente e as quotas de upload/save. O limite geral também é compartilhado por clientes sob o mesmo IP; recarregamentos repetidos ou abuso podem esgotá-lo temporariamente, sem revogar sessões.
+**Não há bloqueio global por nome acionável anonimamente.** Pressão distribuída por nome pede uma prova de trabalho temporária, resolvida em worker no navegador (HTTP 428, `challenge`, novo POST com `proofToken`/`proofNonce`). Troca de senha tem cota própria por ator autenticado. A proteção não impede bots com muitos IPs/recursos. Limites exatos, concorrência, retenção, cardinalidade e limpeza autônoma estão no [contrato de segurança](seguranca.md#resistência-a-abuso).
 
 ### Identificação do IP
 
@@ -107,12 +98,12 @@ Referências técnicas: [Express e proxies confiáveis](https://expressjs.com/en
 
 ## Contrato HTTP
 
-As respostas de usuário incluem somente `id`, `username`, `role`, `blocked`, `mustChangePassword` e `createdAt`. Erros retornam `{ statusCode, message }`.
+As respostas de usuário incluem somente `id`, `username`, `role`, `blocked`, `mustChangePassword` e `createdAt`. Erros retornam `{ statusCode, message }`; podem incluir `challenge` no HTTP 428 ou `code` MFA. Segredos e atributos internos nunca integram o usuário público.
 
 | Método e rota | Entrada | Acesso | Sucesso |
 | --- | --- | --- | --- |
 | `GET /api/health` | — | Público | 200, prontidão do banco e tabela de migrações |
-| `POST /api/auth/login` | `{username,password}` | Público com origem validada | 200, `{user,csrfToken}` e cookie |
+| `POST /api/auth/login` | `{username,password,proofToken?,proofNonce?}` | Público com origem validada | 200, `{user,csrfToken,mfa}` e cookie |
 | `GET /api/auth/me` | — | Autenticado, inclusive senha temporária | 200, `{user,csrfToken}` |
 | `POST /api/auth/logout` | `{}` | Autenticado, inclusive senha temporária | 204 |
 | `POST /api/auth/password` | `{currentPassword,newPassword}` | Autenticado, inclusive senha temporária | 204 |

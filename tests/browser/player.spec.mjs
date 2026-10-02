@@ -1,3 +1,5 @@
+import { verifiedMaster } from '../helpers/verified-master.mjs';
+import { completeFixtureMaster } from '../helpers/browser-master.mjs';
 import { test, expect } from '@playwright/test';
 import { createServer as createViteServer } from 'vite';
 import react from '@vitejs/plugin-react';
@@ -72,6 +74,7 @@ test.beforeAll(async () => {
   expect(response.status).toBe(200);
   const session = await response.json();
   const cookie = response.headers.get('set-cookie').split(';', 1)[0];
+  await verifiedMaster(pool,session.user,cookie);
   masterSession = { cookie, csrfToken: session.csrfToken };
   const idleRom = playableGbRom();
   idleRom.set([0x18, 0xfe], 0x150); // JR to self: real cartridge never writes SRAM.
@@ -110,7 +113,9 @@ async function login(page, user) {
   await page.goto(origin);
   await page.getByLabel('Nome de usuário', { exact: true }).fill(user.username);
   await page.getByLabel('Senha', { exact: true }).fill(password);
+  const result=page.waitForResponse(r=>r.url().endsWith('/api/auth/login')&&r.request().method()==='POST');
   await page.getByRole('button', { name: 'Entrar', exact: true }).click();
+  await completeFixtureMaster(page,await result);
   await expect(page.getByRole('heading', { name: 'Biblioteca', exact: true })).toBeVisible();
 }
 

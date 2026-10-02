@@ -1,4 +1,4 @@
-import { IsString, Length, Matches } from 'class-validator';
+import { IsString, IsOptional, Length, Matches } from 'class-validator';
 
 export class UsernameDto {
   @IsString()
@@ -10,6 +10,12 @@ export class LoginDto extends UsernameDto {
   @IsString()
   @Length(1, 128, { message: 'Informe uma senha de até 128 caracteres.' })
   password!: string;
+
+  @IsOptional() @IsString() @Matches(/^[a-zA-Z0-9_-]{43}$/)
+  proofToken?: string;
+
+  @IsOptional() @IsString() @Matches(/^\d{1,10}$/)
+  proofNonce?: string;
 }
 
 export class ChangePasswordDto {

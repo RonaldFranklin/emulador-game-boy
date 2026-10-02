@@ -20,9 +20,9 @@ export class AuthService implements OnModuleInit {
 
   async onModuleInit() { this.dummyHash = await this.passwords.hash(randomBytes(32).toString('hex')); }
 
-  async login(username: string, password: string, ip: string) {
-    return this.limits.login(ip, async (client) => {
-      await this.limits.claim(username, ip, client);
+  async login(username: string, password: string, ip: string, proof?: {token:string;nonce:string}) {
+    return this.limits.login(ip, username, async (client) => {
+      await this.limits.claim(username, ip, client, proof);
       const found = await client.query<UserRow>('SELECT * FROM users WHERE username = $1', [username]);
       const candidate = found.rows[0];
       const correct = await this.passwords.verify(candidate?.password_hash ?? this.dummyHash, password);
@@ -32,27 +32,26 @@ export class AuthService implements OnModuleInit {
       const current = locked.rows[0];
       // Reset/block may have committed during Argon2 verification: never revive that login.
       if (!current || current.blocked || current.password_hash !== candidate.password_hash) throw this.loginError();
-      await client.query('DELETE FROM sessions WHERE expires_at <= now()');
       await client.query(
         `INSERT INTO sessions (token_hash, user_id, expires_at) VALUES ($1, $2, now() + $3 * interval '1 hour')`,
-        [hashToken(token), current.id, this.config.sessionTtlHours],
+        [hashToken(token), current.id, current.role==='MASTER'?1/12:this.config.sessionTtlHours],
       );
       const user = publicUser(current);
-      return { token, user, csrfToken: csrfForToken(token) };
+      return { token, user, csrfToken: csrfForToken(token),mfa:current.role==='MASTER'?(current.mfa_secret?'verify':'enroll'):'not-required' };
     });
   }
 
   async logout(identity: SessionIdentity) {
-    await this.sessions.withActor(identity, { allowTemporary: true }, async (client) => {
+    await this.sessions.withActor(identity, { allowTemporary: true, mfaFlow:true }, async (client) => {
       await client.query('DELETE FROM sessions WHERE token_hash = $1', [identity.tokenHash]);
     });
   }
 
   async changePassword(identity: SessionIdentity, currentPassword: string, newPassword: string, ip: string) {
-    await this.limits.claim(identity.user.username, ip);
+    await this.limits.bucket('password-actor', identity.user.id, 5, 900);
     if (currentPassword === newPassword) throw new BadRequestException('A nova senha deve ser diferente da senha atual.');
     const hash = await this.passwords.hash(newPassword);
-    await this.sessions.withActor(identity, { allowTemporary: true }, async (client, user) => {
+    await this.sessions.withActor(identity, { allowTemporary: true, master:identity.user.role==='MASTER' }, async (client, user) => {
       if (!await this.passwords.verify(user.password_hash, currentPassword)) throw new BadRequestException('Senha atual incorreta.');
       await client.query('UPDATE users SET password_hash = $1, must_change_password = false WHERE id = $2', [hash, user.id]);
       await client.query('DELETE FROM sessions WHERE user_id = $1', [user.id]);

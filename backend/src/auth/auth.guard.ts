@@ -3,6 +3,7 @@ import { Reflector } from '@nestjs/core';
 import { csrfMatches, sessionToken, type AuthRequest } from './session.js';
 import { SessionService } from './session.service.js';
 
+export const MfaFlow = () => SetMetadata('mfaFlow',true);
 export const Public = () => SetMetadata('public', true);
 export const Master = () => SetMetadata('master', true);
 export const AllowTemporaryPassword = () => SetMetadata('allowTemporary', true);
@@ -25,6 +26,8 @@ export class AuthGuard implements CanActivate {
       throw new ForbiddenException('Troque sua senha temporária para continuar.');
     }
     if (metadata<boolean>('master') && request.identity.user.role !== 'MASTER') throw new ForbiddenException('Acesso permitido somente ao master.');
+    if(request.identity.user.role==='MASTER'&&!metadata<boolean>('mfaFlow')&&(!request.identity.user.mfa_secret||!request.identity.mfaVerifiedAt)) throw new ForbiddenException({message:'Confirme a autenticação em duas etapas para continuar.',code:'MFA_REQUIRED'});
+    if(metadata<boolean>('master')&&!metadata<boolean>('mfaFlow')&&(!request.identity.mfaVerifiedAt||Date.now()-request.identity.mfaVerifiedAt.getTime()>600_000))throw new ForbiddenException({message:'Confirme novamente sua senha e segundo fator em Segurança do master.',code:'MFA_REAUTH_REQUIRED'});
     return true;
   }
 }

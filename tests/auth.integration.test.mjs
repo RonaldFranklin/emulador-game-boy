@@ -1,3 +1,4 @@
+import { verifiedMaster } from './helpers/verified-master.mjs';
 import assert from 'node:assert/strict';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -94,6 +95,7 @@ async function login(username, secret, expectedStatus = 200) {
   assert.match(setCookie, /;\s*(Max-Age|Expires)=/i);
   assert.equal(typeof response.data.csrfToken, 'string');
   assert.ok(response.data.csrfToken.length >= 32);
+  await verifiedMaster(pool,response.data.user,setCookie.split(';')[0]);
   return {
     cookie: setCookie.split(';')[0],
     csrfToken: response.data.csrfToken,
@@ -178,7 +180,7 @@ describe('Autenticação e autorização com PostgreSQL isolado', { concurrency:
   });
 
   // Independent scenarios must not consume one another's login quota. Isolated DB only.
-  beforeEach(async () => { await pool.query('DELETE FROM login_attempts'); });
+  beforeEach(async () => { await app.close(); await pool.query('DELETE FROM login_attempts'); await startApp(); });
 
   after(async () => {
     try {
@@ -540,16 +542,16 @@ describe('Autenticação e autorização com PostgreSQL isolado', { concurrency:
     assert.equal((await login(player.username, player.password)).user.id, player.user.id);
   });
 
-  test('limitação por conta persiste após reinício e libera após expirar a janela', async () => {
+  test('pressão por conta exige prova após reinício e libera após expirar a janela', async () => {
     const player = await createPlayer('limited');
     await pool.query('DELETE FROM login_attempts');
     await pool.query('INSERT INTO login_attempts(key,attempts,window_start) VALUES($1,10,now())',
-      [createHash('sha256').update(`username:${player.username}`).digest('hex')]);
-    await login(player.username, player.password, 429);
+      [createHash('sha256').update(`login-pressure:${player.username}`).digest('hex')]);
+    await login(player.username, player.password, 428);
     await app.close();
     app = undefined;
     await startApp();
-    await login(player.username, player.password, 429);
+    await login(player.username, player.password, 428);
     await pool.query("UPDATE login_attempts SET window_start = now() - interval '901 seconds'");
     assert.equal((await login(player.username, player.password)).user.id, player.user.id);
   });
@@ -557,10 +559,9 @@ describe('Autenticação e autorização com PostgreSQL isolado', { concurrency:
   test('limite por IP abrange contas diferentes e ignora X-Forwarded-For forjado', async () => {
     await pool.query('DELETE FROM login_attempts');
     await login('master_test', masterPassword);
-    // Successful login preserves the independent IP attempt bucket.
-    // Move that persisted counter to its boundary without 100 expensive hashes.
-    await pool.query('UPDATE login_attempts SET attempts = 100 WHERE key = $1',
-      [createHash('sha256').update('ip:127.0.0.1').digest('hex')]);
+    // Persistent three-failure block is independent of successful authentication.
+    await pool.query("UPDATE login_attempts SET blocked_until=now()+interval '2 hours' WHERE key=$1",
+      [createHash('sha256').update('login-failures:127.0.0.1').digest('hex')]);
     await login(account('unknown'), password(), 429);
     const forged = await request('/api/auth/login', {
       method: 'POST',

@@ -30,7 +30,7 @@ npm ci
 npm run setup
 ```
 
-O setup cria `.env` a partir de `.env.example` e gera segredos aleatórios do banco em `.local/secrets/`. Reexecutá-lo preserva os valores existentes e acrescenta o seletor de arquivo do bootstrap quando ausente. `.env` fica com permissão `0600` e não deve ser versionado.
+O setup cria `.env` a partir de `.env.example` e gera segredos aleatórios do banco e a chave de proteção MFA em `.local/secrets/`. Reexecutá-lo preserva os valores existentes e acrescenta o seletor de arquivo do bootstrap quando ausente. `.env` fica com permissão `0600` e não deve ser versionado.
 
 **Antes de iniciar, edite `.env` em um editor** e preencha os dois campos vazios com suas próprias credenciais:
 
@@ -59,7 +59,7 @@ docker compose ps -a
 curl --fail --retry 20 --retry-all-errors --retry-delay 1 http://127.0.0.1:5173/api/health
 ```
 
-Abra **<http://127.0.0.1:5173>** e entre com o usuário/senha definidos no `.env`. Use essa origem exata; `localhost` pode ser recusado pela proteção de origem.
+Abra **<http://127.0.0.1:5173>** e entre com o usuário/senha definidos no `.env`. Use essa origem exata; `localhost` pode ser recusado pela proteção de origem. O master deve concluir o [cadastro MFA e guardar os códigos de recuperação](docs/guia-de-uso.md#segurança-do-master) antes de jogar ou administrar.
 
 O Compose **`emulador-game-boy-dev`** aguarda o banco, aplica migrações e executa o serviço de bootstrap antes de liberar a API. `migrate` e `bootstrap` terminarem em `Exited (0)` é esperado. Sem master, credenciais ausentes/incompletas/inválidas impedem a inicialização. Se já existe master, seus dados são preservados e os campos de bootstrap são ignorados.
 
@@ -105,3 +105,5 @@ Resultados e limitações de cada entrega estão em [validação](docs/validacao
 - [Arquitetura e decisões](docs/decisoes.md)
 - [Autenticação](docs/autenticacao.md), [catálogo](docs/catalogo.md) e [emulação/saves](docs/emulacao.md)
 - [Histórico técnico](docs/historico.md) e [orientação de desenvolvimento](docs/desenvolvimento.md)
+
+Atualização de segurança: instalações existentes exigem o [upgrade conjunto 007–010](docs/operacao.md#upgrade-de-segurança-007010), seguido de [cadastro MFA pelo master](docs/guia-de-uso.md#segurança-do-master). Preparação local não significa aplicação no servidor; veja a [matriz de pendências operacionais](docs/seguranca.md#matriz-de-entrega-e-aceite-pendente).

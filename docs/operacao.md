@@ -6,13 +6,13 @@ O [README](../README.md) contém a instalação inicial. Este guia reúne config
 
 O fluxo principal está no [README](../README.md#instalação-local): preencher `ADMIN_USERNAME` e `ADMIN_PASSWORD` no `.env` local e executar `docker compose up -d --build`. Não é necessário executar SQL nem criar uma conta pela API.
 
-`npm run setup` preserva `.env` e segredos já existentes e aplica `0600` ao `.env`. A pasta `.local/secrets/` tem `0700`; os dois arquivos de senha do banco têm `0644` dentro dessa pasta privada para permitir leitura pelos UIDs dos containers. Não mova esses arquivos para um diretório compartilhado. Remover arquivos de segredo não altera as senhas de um banco já inicializado.
+`npm run setup` preserva `.env` e segredos já existentes e aplica `0600` ao `.env`. A pasta `.local/secrets/` tem `0700`; os três arquivos de senha do banco e a chave MFA têm `0644` dentro dessa pasta privada para permitir leitura pelos UIDs dos containers. São gerados com `node:crypto.randomBytes`: senhas com 36 bytes aleatórios em base64url e chave MFA com 32 bytes em hexadecimal. `MFA_ENCRYPTION_KEY_FILE` e `PGPASSWORD_FILE` são caminhos internos definidos pelo Compose, não valores a publicar no `.env.example`. Não mova esses arquivos para um diretório compartilhado. Remover arquivos de segredo não altera as senhas de um banco já inicializado.
 
 `BOOTSTRAP_ENV_SOURCE=./.env` seleciona o arquivo real. O setup adiciona essa chave quando ela está ausente, preservando qualquer valor já definido. Se o seletor estiver ausente ou vazio, o Compose monta `.env.example`, cujos campos de credencial são vazios. Esse fallback permite iniciar um banco já provisionado mesmo sem `.env`; ele não procura automaticamente outro arquivo quando um caminho explícito não existe. Para um `.env` legado sem o seletor, execute `npm run setup` antes de subir. Sem master, é necessário selecionar o arquivo real e preencher as credenciais.
 
 O serviço temporário `bootstrap` depende do sucesso de `migrate`; o backend depende do sucesso de `bootstrap`. Apenas esse serviço recebe o arquivo selecionado como secret somente leitura em `/run/secrets/bootstrap_env`. O processo usa `node:util.parseEnv`, sem executar ou avaliar o conteúdo de um arquivo UTF-8 regular de até 64 KiB. `ADMIN_USERNAME`/`ADMIN_PASSWORD` não entram em `environment`, argumentos, build ou frontend.
 
-O Compose executa `node backend/dist/cli/bootstrap-master-env.js`, também disponível pelo script `npm run bootstrap:env --workspace backend`. Seu usuário de sistema é root somente nesse container temporário, para conseguir ler o arquivo `0600` sem depender do UID do host. O papel PostgreSQL continua sendo `emulador`, sem superusuário nem criação de bancos; backend e frontend continuam sem root. Não há montagem de socket Docker, diretório pessoal ou arquivos externos ao projeto.
+O Compose executa `node backend/dist/cli/bootstrap-master-env.js`, também disponível pelo script `npm run bootstrap:env --workspace backend`. Seu usuário de sistema é root somente nesse container temporário, para conseguir ler o arquivo `0600` sem depender do UID do host. O papel PostgreSQL do bootstrap continua sendo `emulador`, sem superusuário nem criação de bancos; a API usa `emulador_runtime`. Backend e frontend continuam sem root. Não há montagem de socket Docker, diretório pessoal ou arquivos externos ao projeto.
 
 Sem master, os dois campos precisam estar presentes e válidos: nome de 3–32 caracteres `[a-z0-9_]`, senha de 12–128 caracteres. Os valores não são aparados. Use valores em uma única linha entre aspas simples: `$`, `#`, espaços, Unicode e aspas duplas permanecem literais. Essa forma não admite apóstrofo interno, mesmo escapado, nem barra invertida ao final do valor, devido à diferença de parsing entre Compose e Node. Barras invertidas internas permanecem literais. Para senhas com apóstrofo ou barra invertida final, use a alternativa interativa abaixo. Chaves `ADMIN_*` duplicadas são recusadas. Não tente escapar ou expandir valores pelo shell; não use `source .env`, `export` ou argumentos de shell para passar a senha. Exemplo sem credenciais:
 
@@ -42,7 +42,7 @@ Use `docker compose config --quiet` para validar a configuração sem imprimi-la
 docker compose build backend
 docker compose up -d database
 docker compose run --rm migrate
-docker compose run --rm --no-deps backend npm run bootstrap:master --workspace backend
+docker compose run --rm --no-deps migrate npm run bootstrap:master --workspace backend
 docker compose up -d
 ```
 
@@ -60,7 +60,9 @@ O comando pergunta nome e senha duas vezes, sem eco da senha, recusa argumentos 
 | `APP_ORIGIN` | `http://127.0.0.1:5173` | Origem exata do navegador, sem barra final |
 | `WEB_PORT` | `5173` | Porta publicada somente em loopback |
 | `APP_DB_NAME` | `emulador` | Banco ativo; recuperação pode criar outro banco |
-| `SESSION_TTL_HOURS` | `168` | Expiração fixa, entre 1 e 720 horas |
+| `SESSION_TTL_HOURS` | `168` | Expiração fixa do jogador, entre 1 e 720 horas |
+| `MASTER_SESSION_TTL_HOURS` | `8` | Sessão master verificada, 1–8 horas |
+| `MASTER_IDLE_MINUTES` | `15` | Inatividade HTTP do master, 1–30 minutos |
 | `CATALOG_VOLUME` | `emulador-game-boy-dev_catalog_data` | Volume privado de ROMs/capas; recuperação usa outro volume |
 
 Se mudar a porta, atualize também `APP_ORIGIN` e recrie os containers. Este Compose usa HTTP local e cookie sem `Secure`; `HttpOnly` e `SameSite=Strict` estão ativos. **Não é uma configuração de produção ou acesso pela rede.**
@@ -86,7 +88,7 @@ docker compose build frontend
 docker compose up -d --no-deps frontend
 ```
 
-Não há motivo para migrar, reiniciar banco ou fazer backup completo numa mudança só de interface/documentação. Para **backend com migrações ou manutenção de dados**, primeiro encerre os jogos com sincronização confirmada, confira contexto/containers/volumes e siga, avançando somente após sucesso:
+Não há motivo para migrar, reiniciar banco ou fazer backup completo numa mudança só de interface/documentação. Para o upgrade 007–010 e sua mudança de credenciais/redes, siga a [sequência específica abaixo](#upgrade-de-segurança-007010). Para **outras atualizações de backend com migrações ou manutenção de dados**, primeiro encerre os jogos com sincronização confirmada, confira contexto/containers/volumes e siga, avançando somente após sucesso:
 
 ```bash
 npm run backup
@@ -107,7 +109,7 @@ Testes e seleção proporcional estão em [desenvolvimento](desenvolvimento.md#v
 
 ### Pendência local de init antigo — 01/10/2026
 
-No incidente relatado nesta data, `compose start` tentou executar um container `migrate` antigo com somente a migração 001, enquanto banco e backend já estavam em 001–006. A execução falhou com rollback; depois da conferência do schema, backend/frontend existentes foram iniciados diretamente. Neste fechamento, inspeção somente leitura confirmou `migrate` em `Exited (1)` com apenas `001-auth.sql` e arquivos 001–006 no backend. Não foram repetidos SQL, migrações ou manutenção.
+No incidente relatado nesta data, `compose start` tentou executar um container `migrate` antigo com somente a migração 001, enquanto banco e backend já estavam em 001–006. A execução falhou com rollback; depois da conferência do schema, backend/frontend existentes foram iniciados diretamente. Na inspeção somente leitura registrada naquela etapa, foram confirmados `migrate` em `Exited (1)` com apenas `001-auth.sql` e arquivos 001–006 no backend. Não foram repetidos SQL, migrações ou manutenção.
 
 O runner recusa migração aplicada ausente nos arquivos e reverte a transação; não remova registros/checksums para contornar essa proteção. A regularização desse container permanece pendente para uma manutenção autorizada, com backup verificado e imagem atual. `migrate` e `bootstrap` usam a mesma imagem de backend: o procedimento de atualização acima reconstrói essa imagem e `compose run --rm --no-deps migrate` cria um container novo a partir dela. Isso não atualiza o container antigo parado. Nunca reutilize esse init obsoleto em uma instalação nova.
 
@@ -140,14 +142,16 @@ O comando restaura com o papel `emulador`, revoga as sessões/reservas recuperad
 ```bash
 docker compose build backend
 docker compose stop backend
+docker compose run --rm --no-deps provision-runtime
 docker compose run --rm --no-deps migrate
+docker compose run --rm --no-deps grant-runtime
 docker compose run --rm --no-deps bootstrap
 docker compose up -d --no-deps --force-recreate backend
 docker compose up -d --no-deps frontend
 curl --fail --retry 20 --retry-all-errors --retry-delay 1 http://127.0.0.1:5173/api/health
 ```
 
-Entre novamente e confira contas, catálogo e progresso dentro dos jogos. O banco e o volume anteriores continuam preservados; para voltar, restaure os dois valores anteriores no `.env` e repita a recriação. Falha de recuperação deixa o destino não ativado para diagnóstico, sem alterar `.env` ou a origem. Se restaurar em outra máquina, execute `npm ci`, `npm run setup` e `docker compose up -d database` para criar o papel da aplicação e **novos segredos locais**; copie a pasta de backup inteira por meio seguro. Não é necessário recuperar segredos antigos do banco. Restaure o backup, configure os dois destinos impressos e só então inicie os serviços restantes; o master recuperado será preservado pelo bootstrap.
+Entre novamente e confira contas, catálogo e progresso dentro dos jogos. O banco e o volume anteriores continuam preservados; para voltar, restaure os dois valores anteriores no `.env` e repita a recriação. Falha de recuperação deixa o destino não ativado para diagnóstico, sem alterar `.env` ou a origem. Se restaurar em outra máquina, execute `npm ci`, `npm run setup` e `docker compose up -d database` para criar o papel da aplicação e **novos segredos locais**; copie a pasta de backup inteira por meio seguro. Senhas antigas do banco podem ser substituídas em um cluster novo, mas **a chave MFA original precisa ser recuperada separadamente**: não substitua `.local/secrets/mfa_encryption_key` por outra chave se houver cadastros MFA no dump. Configuração/core também precisam ser preservados. Restaure o backup, configure os dois destinos impressos e só então inicie os serviços restantes; o master recuperado será preservado pelo bootstrap.
 
 Política desta fase local: backup manual antes de migrações/mudanças de dados e após sessões relevantes de desenvolvimento, com restauração verificada. Pasta raiz de backups `0700`, arquivos `0600`, sem exclusão automática. Backups contêm material sensível, incluindo hashes de senhas, ROMs e saves; checksums não são criptografia nem prova de autoria. Use apenas backups de origem confiável. Agendamento, cópia externa criptografada, retenção automática e objetivos de recuperação ainda precisam ser definidos, além de um ensaio completo em outra máquina, antes de uma eventual implantação externa.
 
@@ -159,4 +163,37 @@ Este Compose usa Vite de desenvolvimento, HTTP e loopback; não é implantação
 
 O core fixado não garante todo cartucho/periférico. States dependem da ROM/core exatos; preserve as fontes/compilação correspondentes ao planejar recuperação, conforme [saves](saves.md) e [fontes do motor](fontes-emulador.md). O backup de dados não contém automaticamente os binários do emulador. Pendências exclusivas do navegador não entram no backup do servidor.
 
-Não há coleta automática de arquivos retidos, recuperação pública da senha de master nem auditoria administrativa completa. Limitações testadas estão em [validação](validacao.md); orientações para agentes em [AGENTS.md](../AGENTS.md). Nenhuma operação autoriza publicar segredos, ROMs ou saves pessoais.
+Não há coleta automática de arquivos retidos nem recuperação pública da senha/MFA de master. Existe [auditoria limitada e amostrada](seguranca.md#auditoria), não uma trilha administrativa completa. Limitações testadas estão em [validação](validacao.md); orientações para agentes em [AGENTS.md](../AGENTS.md). Nenhuma operação autoriza publicar segredos, ROMs ou saves pessoais.
+
+## Upgrade de segurança 007–010
+
+**Preparado e ensaiado isoladamente; não aplicado ao banco pessoal nem remotamente nesta etapa.** Não atualizar somente frontend. Backend, frontend, schema e credenciais runtime devem ser compatíveis. Em instalação vazia, `npm run setup` + o fluxo inicial já provisionam ambos os papéis; o dono cadastra MFA no primeiro acesso.
+
+Para uma instalação local existente, somente em manutenção autorizada:
+
+1. Confirme contexto, volumes/imagens e schema; peça que jogos saiam com sincronização confirmada. Faça `npm run backup` e `npm run restore:verify -- .local/backups/PASTA` **com a instalação anterior ainda operacional**. Anote configuração/imagens e preserve o backup. Não use o init antigo parado.
+2. Execute `npm run setup` no checkout novo. Preserva segredos existentes e cria apenas os ausentes: `runtime_db_password` e `mfa_encryption_key`. Guarde a chave MFA por meio protegido fora da origem, junto do plano de recuperação, sem imprimir o conteúdo. Gerar esse arquivo não inscreve usuários.
+3. Valide `docker compose config --quiet` e construa as imagens compatíveis. Depois do backup verificado, a sequência local é:
+
+```bash
+docker compose build backend frontend
+docker compose stop frontend backend
+# Recria somente o serviço necessário para redes/secrets/privilégios novos;
+# preserva o volume PostgreSQL e não usa down -v.
+docker compose up -d --no-deps database
+# Aguarde database healthy em docker compose ps.
+docker compose run --rm --no-deps provision-runtime
+docker compose run --rm --no-deps migrate
+docker compose run --rm --no-deps grant-runtime
+docker compose up -d --no-deps backend frontend
+curl --fail --retry 20 --retry-all-errors --retry-delay 1 http://127.0.0.1:5173/api/health
+```
+
+Avance somente após sucesso. `provision-runtime` cria o LOGIN ausente com secret separado e não redefine a senha de um papel existente; recusa papel privilegiado/membro de outro papel. `migrate` aplica 007–010 como proprietário; `grant-runtime` reaplica somente os grants atuais e a restrição TEMP, necessária após dumps sem ACL. A API não recebe a senha administrativa nem a do migrador. O setup não altera a senha de um cluster existente.
+
+4. Confirme que a API realmente usa `emulador_runtime`, que frontend não alcança o banco, os limites de processo/filesystem e o header CSP no HTML. O master deve entrar, cadastrar TOTP e guardar recuperação conforme [guia](guia-de-uso.md#segurança-do-master). Sessões MASTER antigas sem segundo fator não conservam administração; sessões de jogadores e progresso permanecem.
+5. Faça backup/verificação após aplicação e registre versão/resultado no ambiente correto. Se falhar, mantenha a API indisponível e investigue; não apague limites, migrações, contas ou volumes. Voltar a imagem anterior não desfaz schema nem grants: recuperação usa o backup em banco/volume novos.
+
+O bundle v4 inclui colunas MFA cifradas/códigos protegidos e auditoria no dump, **não** arquivos de segredo/configuração nem core. A chave MFA externa é indispensável para recuperar autenticadores em outra máquina. Perder a chave não autoriza zerar MFA ou recriar contas. Ao restaurar, revogue sessões como já faz `restore:recover`, provisione os papéis, migre o destino e execute `grant-runtime` antes de ativar. Preserve v1–v4; não invente snapshot a partir de SRAM.
+
+A configuração de servidor tem seus próprios overrides e procedimentos: adaptar este roteiro mediante autorização, consultando documentação privada. Requisitos pendentes para proxy, CSP efetiva e backup externo estão na [matriz SEC/OPS](seguranca.md#matriz-de-entrega-e-aceite-pendente).

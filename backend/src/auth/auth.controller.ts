@@ -2,10 +2,10 @@ import { Body, Controller, Get, HttpCode, Inject, Post, Req, Res } from '@nestjs
 import type { Response } from 'express';
 import type { AppConfig } from '../config.js';
 import { publicUser } from '../users/user.js';
-import { AllowTemporaryPassword, Public } from './auth.guard.js';
+import { AllowTemporaryPassword, MfaFlow, Public } from './auth.guard.js';
 import { AuthService } from './auth.service.js';
 import { ChangePasswordDto, LoginDto } from './dto.js';
-import { clearSessionCookie, CONFIG, setSessionCookie, type AuthRequest } from './session.js';
+import { clearSessionCookie, CONFIG, mfaStatus, setSessionCookie, type AuthRequest } from './session.js';
 
 @Controller('auth')
 export class AuthController {
@@ -15,18 +15,21 @@ export class AuthController {
   @Post('login')
   @HttpCode(200)
   async login(@Body() input: LoginDto, @Req() request: AuthRequest, @Res({ passthrough: true }) response: Response) {
-    const { token, user, csrfToken } = await this.auth.login(input.username, input.password, request.ip ?? 'unknown');
-    setSessionCookie(response, token, this.config);
-    return { user, csrfToken };
+    const { token, user, csrfToken, mfa } = await this.auth.login(input.username, input.password, request.ip ?? 'unknown', input.proofToken && input.proofNonce ? {token:input.proofToken,nonce:input.proofNonce} : undefined);
+    response.locals.auditActor=user.id;
+    setSessionCookie(response, token, this.config,user.role==='MASTER'?1/12:this.config.sessionTtlHours);
+    return { user, csrfToken, mfa };
   }
 
   @AllowTemporaryPassword()
+  @MfaFlow()
   @Get('me')
   me(@Req() request: AuthRequest) {
-    return { user: publicUser(request.identity.user), csrfToken: request.identity.csrfToken };
+    return { user: publicUser(request.identity.user), csrfToken: request.identity.csrfToken, mfa:mfaStatus(request.identity) };
   }
 
   @AllowTemporaryPassword()
+  @MfaFlow()
   @Post('logout')
   @HttpCode(204)
   async logout(@Req() request: AuthRequest, @Res({ passthrough: true }) response: Response) {

@@ -10,6 +10,7 @@ export interface SessionIdentity {
   tokenHash: string;
   csrfToken: string;
   user: UserRow;
+  mfaVerifiedAt: Date | null;
 }
 
 export interface AuthRequest extends Request { identity: SessionIdentity; }
@@ -33,13 +34,13 @@ export function csrfMatches(provided: unknown, expected: string): boolean {
   return providedBytes.length === expectedBytes.length && timingSafeEqual(providedBytes, expectedBytes);
 }
 
-export function setSessionCookie(response: Response, token: string, config: AppConfig): void {
+export function setSessionCookie(response: Response, token: string, config: AppConfig, maxAgeHours = config.sessionTtlHours): void {
   response.cookie(SESSION_COOKIE, token, {
     httpOnly: true,
     secure: config.secureCookie,
     sameSite: 'strict',
     path: '/api',
-    maxAge: config.sessionTtlHours * 3_600_000,
+    maxAge: maxAgeHours * 3_600_000,
   });
 }
 
@@ -50,4 +51,8 @@ export function clearSessionCookie(response: Response, config: AppConfig): void 
     sameSite: 'strict',
     path: '/api',
   });
+}
+
+export function mfaStatus(identity: SessionIdentity) {
+  return identity.user.role!=='MASTER'?'not-required':!identity.user.mfa_secret?'enroll':!identity.mfaVerifiedAt?'verify':'verified';
 }

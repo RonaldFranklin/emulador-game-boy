@@ -7,12 +7,12 @@ await chmod('.local', 0o700);
 await chmod('.local/secrets', 0o700);
 await mkdir('.local/screenshots', { recursive: true, mode: 0o700 });
 await chmod('.local/screenshots', 0o700);
-for (const name of ['postgres_password', 'app_db_password']) {
+for (const name of ['postgres_password', 'app_db_password', 'runtime_db_password', 'mfa_encryption_key']) {
   try {
     // The containing directory is private (0700). Compose bind-mounted secrets
     // must also be readable by PostgreSQL's container UID, which differs from the host UID.
     const file = await open(`.local/secrets/${name}`, 'wx', 0o644);
-    try { await file.writeFile(randomBytes(36).toString('base64url') + '\n'); }
+    try { await file.writeFile((name === 'mfa_encryption_key' ? randomBytes(32).toString('hex') : randomBytes(36).toString('base64url')) + '\n'); }
     finally { await file.close(); }
     console.log(`Criado arquivo secreto ${name} (conteúdo omitido).`);
   } catch (error) {

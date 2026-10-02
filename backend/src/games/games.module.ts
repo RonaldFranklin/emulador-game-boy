@@ -18,7 +18,7 @@ class GamesController {
   @Master()
   @UseInterceptors(CatalogUploadInterceptor)
   @Post()
-  create(@Req() request: CatalogRequest) { return this.games.create(request); }
+  async create(@Req() request: CatalogRequest, @Res({passthrough:true}) response:Response) { const result=await this.games.create(request);response.locals.auditTarget=result.game.id;return result; }
 
   @Master()
   @UseInterceptors(CatalogUploadInterceptor)

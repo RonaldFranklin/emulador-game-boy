@@ -114,3 +114,16 @@ Em **Catálogo**, MASTER cadastra nome, ROM `.gb`/`.gba` descompactada, capa PNG
 Após três falhas de login do mesmo IP em duas horas, novos logins desse IP são bloqueados por duas horas desde a terceira falha. Aguarde o prazo mostrado; recarregar/reiniciar não limpa o bloqueio. Sessões existentes continuam funcionando. NAT pode compartilhar o IP; veja [autenticação](autenticacao.md#limitação-de-tentativas).
 
 GB dual-mode roda como Game Boy original; GBC exclusivo e outros consoles ficam fora. Os bytes da ROM chegam ao navegador autorizado, sem promessa de DRM. O motor e suas fontes/licenças são servidos localmente: [fontes do motor](fontes-emulador.md).
+
+## Segurança do master
+
+Após a aplicação da atualização de segurança, cada master precisa configurar seu próprio segundo fator. O operador primeiro prepara a chave protegida do servidor conforme [operação](operacao.md#upgrade-de-segurança-007010); isso não cadastra o autenticador de ninguém.
+
+1. Entre com sua senha. Na tela **Segurança do master**, confirme a senha e escolha **Iniciar cadastro**.
+2. No seu autenticador, adicione manualmente a chave mostrada: TOTP por tempo, seis dígitos, 30 segundos, SHA-1. Não envie essa chave por chat.
+3. Digite o código atual e confirme. Marque que guardou os dez códigos de recuperação em local seguro, separado do autenticador, antes de continuar. Eles aparecem somente uma vez.
+4. Nos próximos acessos, informe senha e um código do autenticador. Código já usado não se repete: espere o seguinte. Um código de recuperação pode substituir o segundo fator uma única vez; seu uso encerra as outras sessões.
+
+Ações administrativas podem pedir nova confirmação em **Segurança do master**, após dez minutos. Preencha senha e um código novo; volte à ação e confira os dados antes de repeti-la. A sessão master vence após até oito horas ou 15 minutos sem requisições; heartbeat do player conta como atividade. Jogadores continuam com suas regras anteriores.
+
+Para trocar de autenticador ou renovar os códigos, escolha **Substituir autenticador e códigos de recuperação**, prove senha + fator atual/recuperação e confirme o novo cadastro. Não descarte o fator anterior antes da confirmação. Se perder autenticador e todos os códigos, não existe recuperação pública, senha mestra ou bypass pelo bootstrap: pare e acione o operador para um procedimento específico autorizado, preservando dados e verificando identidade. A chave do servidor também precisa de backup protegido; perdê-la não é resolvido recriando uma chave aleatória.

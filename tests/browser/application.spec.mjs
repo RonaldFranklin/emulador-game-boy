@@ -1,3 +1,4 @@
+import { completeFixtureMaster } from '../helpers/browser-master.mjs';
 import { test, expect } from '@playwright/test';
 import { createServer as createViteServer } from 'vite';
 import { createServer } from 'node:net';
@@ -136,7 +137,9 @@ async function login(page, username, secret) {
   await page.goto(origin);
   await page.getByLabel('Nome de usuário', { exact: true }).fill(username);
   await page.getByLabel('Senha', { exact: true }).fill(secret);
+  const result=page.waitForResponse(r=>r.url().endsWith('/api/auth/login')&&r.request().method()==='POST');
   await page.getByRole('button', { name: 'Entrar', exact: true }).click();
+  await completeFixtureMaster(page,await result);
 }
 
 async function changeTemporaryPassword(page, current, next) {

@@ -1,4 +1,5 @@
-import { BadRequestException, Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Patch, Post, Req } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Patch, Post, Req, Res } from '@nestjs/common';
+import type { Response } from 'express';
 import { Master } from '../auth/auth.guard.js';
 import type { AuthRequest } from '../auth/session.js';
 import { CreateUserDto, ResetPasswordDto, SetStatusDto } from './dto.js';
@@ -13,8 +14,8 @@ export class UsersController {
   list(@Req() request: AuthRequest) { return this.users.list(request.identity); }
 
   @Post()
-  create(@Body() input: CreateUserDto, @Req() request: AuthRequest) {
-    return this.users.create(request.identity, input.username, input.password);
+  async create(@Body() input: CreateUserDto, @Req() request: AuthRequest, @Res({passthrough:true}) response:Response) {
+    const result=await this.users.create(request.identity, input.username, input.password);response.locals.auditTarget=result.user.id;return result;
   }
 
   @Patch(':id/status')

@@ -7,6 +7,8 @@ export class HttpExceptionFilter implements ExceptionFilter {
 
   catch(error: unknown, host: ArgumentsHost) {
     const response = host.switchToHttp().getResponse<Response>();
+    response.locals.releaseAdmission?.();
+    if(response.destroyed)return;
     const parserError = typeof error === 'object' && error !== null && 'type' in error ? error.type : undefined;
     const status = error instanceof HttpException ? error.getStatus()
       : parserError === 'entity.parse.failed' ? 400 : parserError === 'entity.too.large' ? 413 : parserError === 'encoding.unsupported' ? 415 : 500;
@@ -29,6 +31,9 @@ export class HttpExceptionFilter implements ExceptionFilter {
       const retry = typeof body === 'object' && body !== null && 'retryAfterSeconds' in body ? body.retryAfterSeconds : undefined;
       response.setHeader('Retry-After', typeof retry === 'number' && Number.isInteger(retry) && retry > 0 && retry <= 7200 ? retry : 900);
     }
-    response.status(status).json({ statusCode: status, message });
+    const body = error instanceof HttpException ? error.getResponse() : undefined;
+    const challenge = status === 428 && typeof body === 'object' && body !== null && 'challenge' in body ? body.challenge : undefined;
+    const code = typeof body==='object'&&body!==null&&'code' in body&&['MFA_REQUIRED','MFA_REAUTH_REQUIRED'].includes(String(body.code))?body.code:undefined;
+    response.status(status).json({ statusCode: status, message, ...(challenge ? {challenge} : {}),...(code?{code}:{}) });
   }
 }

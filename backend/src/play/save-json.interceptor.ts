@@ -2,6 +2,7 @@ import { CallHandler, ExecutionContext, HttpException, HttpStatus, Injectable, N
 import express, { type Response } from 'express';
 import { finalize, type Observable } from 'rxjs';
 import type { AuthRequest } from '../auth/session.js';
+import { RateLimitService } from '../auth/rate-limit.service.js';
 import { MAX_SAVE_JSON_BYTES } from './play-constants.js';
 
 /** Route-scoped large JSON parser: all guards (including CSRF) run first. */
@@ -44,4 +45,13 @@ export class SaveJsonInterceptor implements NestInterceptor {
 @Injectable()
 export class StateJsonInterceptor extends SaveJsonInterceptor {
  protected override readonly parse = express.json({limit:2100000,strict:true,inflate:false});
+ constructor(private readonly limits:RateLimitService){super();}
+ override async intercept(context:ExecutionContext,next:CallHandler){
+   const req=context.switchToHttp().getRequest<AuthRequest>();
+   // Request count also bounds ingress bytes: each body is at most 2.1 MB.
+   // Kept separate from committed-write budgets so a lost ACK can be retried.
+   await this.limits.bucket('states-ingress-global','global',120,60);
+   await this.limits.bucket('states-ingress',req.identity.user.id,20,60);
+   return super.intercept(context,next);
+ }
 }

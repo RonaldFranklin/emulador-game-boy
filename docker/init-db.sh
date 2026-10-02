@@ -10,3 +10,6 @@ REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 ALTER SCHEMA public OWNER TO emulador;
 SQL
 unset APP_DB_PASSWORD
+# This file runs only for a new data directory. Upgrade uses the explicit
+# provision-runtime service before migration 010, after a verified backup.
+sh /opt/emulador/provision-runtime.sh

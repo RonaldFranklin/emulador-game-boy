@@ -54,4 +54,4 @@ console.log(`Recuperação concluída em um NOVO banco: ${database}`);
 console.log('Sessões restauradas foram revogadas. Banco ativo e .env permanecem preservados.');
 console.log(`APP_DB_NAME=${database}`);
 console.log(`CATALOG_VOLUME=${volume}`);
-console.log('Para ativar, siga docs/operacao.md: parar backend, configurar os destinos acima, executar migrações/bootstrap e recriar backend/frontend sem dependências.');
+console.log('Para ativar, siga docs/operacao.md: parar backend, configurar os destinos acima, provisionar o papel runtime, executar migrações/grant-runtime/bootstrap e recriar backend/frontend sem dependências.');

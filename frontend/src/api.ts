@@ -10,15 +10,20 @@ export interface User {
 export interface Session {
   user: User;
   csrfToken: string;
+  mfa?: 'not-required'|'enroll'|'verify'|'verified';
 }
 
 export class ApiError extends Error {
   readonly status: number;
+  readonly code?: string;
+  readonly challenge?: {token:string;zeros:number};
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, challenge?: {token:string;zeros:number}, code?:string) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
+    this.challenge = challenge;
+    this.code=code;
   }
 }
 
@@ -63,8 +68,15 @@ export async function api<T>(path: string, options: Options = {}): Promise<T> {
       : 'Não foi possível concluir a solicitação. Tente novamente.';
     if (response.status === 401) message = 'Nome de usuário ou senha inválidos, ou sessão encerrada.';
     if (response.status === 403) message = 'Você não tem permissão para realizar esta ação.';
+    let code:string|undefined;
+    let challenge: {token:string;zeros:number} | undefined;
     try {
       const result: unknown = await response.json();
+      if(typeof result==='object'&&result!==null&&'code' in result&&typeof result.code==='string')code=result.code;
+      if (response.status===428 && typeof result==='object' && result!==null && 'challenge' in result) {
+        const c=result.challenge as {token?:unknown;zeros?:unknown};
+        if(typeof c?.token==='string' && /^[a-zA-Z0-9_-]{43}$/.test(c.token) && (c.zeros===4||c.zeros===5)) challenge={token:c.token,zeros:c.zeros};
+      }
       if (typeof result === 'object' && result !== null && 'message' in result) {
         const detail = result.message;
         if (typeof detail === 'string') message = detail;
@@ -75,7 +87,7 @@ export async function api<T>(path: string, options: Options = {}): Promise<T> {
     } catch {
       // Proxy and connection failures can return a non-JSON response.
     }
-    throw new ApiError(response.status, message);
+    throw new ApiError(response.status, message, challenge, code);
   }
 
   if (response.status === 204) return undefined as T;

@@ -13,6 +13,7 @@ Aplicação local de GB/GBA com autenticação, usuários, temas, catálogo, emu
 
 - [Decisões e arquitetura](decisoes.md): tecnologias, motivos, escopo e pendências.
 - [Regras de negócio](regras-de-negocio.md): perfis, catálogo e progresso individual.
+- [Segurança e aceite operacional](seguranca.md): limites, MFA, auditoria, CSP, permissões e matriz SEC/OPS.
 - [Autenticação e API](autenticacao.md): sessões, segurança, bootstrap e administração.
 - [Catálogo](catalogo.md): uploads, admissão GB/GBA, capas, disponibilidade e limites.
 - [Emulação e saves](emulacao.md): player, autorização, concorrência e recuperação.

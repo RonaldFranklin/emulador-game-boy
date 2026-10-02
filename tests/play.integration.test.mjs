@@ -1,3 +1,4 @@
+import { verifiedMaster } from './helpers/verified-master.mjs';
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
@@ -42,6 +43,7 @@ async function user(role = 'JOGADOR', mustChange = false) {
   await pool.query('INSERT INTO users(id,username,password_hash,role,must_change_password) VALUES($1,$2,$3,$4,$5)', [id,username,hash,role,mustChange]);
   const result = await request('/api/auth/login', { method: 'POST', body: { username, password } });
   assert.equal(result.status, 200);
+  await verifiedMaster(pool,result.data.user,result.headers.get('set-cookie').split(';')[0]);
   return { id, username, cookie: result.headers.get('set-cookie').split(';')[0], csrfToken: result.data.csrfToken };
 }
 async function game(console = 'GB', active = true) {
@@ -453,4 +455,64 @@ describe('Player privado e save nativo com banco isolado', { concurrency: false 
    assert.equal((await pool.query('SELECT count(*)::int AS n FROM save_states WHERE user_id=$1 AND game_id=$2',[player.id,g.id])).rows[0].n,0);
   });
 
+  test('SEC-07: orçamento persistente por ator/global, bytes, expiração e retry idempotente',async()=>{
+   await pool.query('DELETE FROM login_attempts');
+   const {STATE_CORE}=await import('../backend/dist/play/states.service.js');
+   const g=await game(),lease=await acquire(g),data=Buffer.alloc(71680,13),native=Buffer.from('synthetic-native');
+   const meta=(await request(playPath(g,'/states'),{session:player})).data;
+   const body={leaseId:lease.leaseId,version:0,label:'Budget',coreId:STATE_CORE,romHash:meta.romHash,format:1,dataBase64:data.toString('base64'),nativeBase64:native.toString('base64'),sha256:checksum(data),nativeSha256:checksum(native)};
+   const put=(input=body,actor=player)=>request(playPath(g,'/states/0'),{method:'PUT',session:actor,body:input});
+   for(let i=0;i<10;i++)assert.equal((await put({...body,version:i,label:`Budget ${i}`})).status,200);
+   const blocked=await put({...body,version:10});assert.equal(blocked.status,429);assert.ok(Number(blocked.headers.get('retry-after'))<=60);
+   assert.equal((await put({...body,version:9,label:'Budget 9'})).status,200); // lost ACK retry at exhausted budget
+   const foreign=await acquire(g,other);assert.equal((await put({...body,leaseId:foreign.leaseId},other)).status,200);
+   await pool.query("UPDATE login_attempts SET window_start=clock_timestamp()-interval '61 seconds' WHERE key=$1",[checksum(Buffer.from(`states-write:${player.id}`))]);
+   assert.equal((await put({...body,version:10})).status,200);
+   await pool.query('UPDATE login_attempts SET byte_count=$2 WHERE key=$1',[checksum(Buffer.from(`states-write:${player.id}`)),8*1024**2]);
+   assert.equal((await put({...body,version:11})).status,429);
+   await app.close();await start();assert.equal((await put({...body,version:11})).status,429);
+   const read=()=>request(playPath(g,'/states/0/load'),{method:'POST',session:player,body:{leaseId:lease.leaseId,version:11}});
+   for(let i=0;i<20;i++)assert.equal((await read()).status,201);
+   assert.equal((await read()).status,429);
+   await pool.query('UPDATE login_attempts SET attempts=120 WHERE key=$1',[checksum(Buffer.from('states-write:global'))]);
+   assert.equal((await put({...body,version:1,leaseId:foreign.leaseId},other)).status,429);
+   assert.equal((await pool.query('SELECT version FROM save_states WHERE user_id=$1 AND game_id=$2 AND slot=0',[player.id,g.id])).rows[0].version,11);
+  });
+
+  test('SEC-06: auditoria correlacionada, limitada e sem senha/token/conteúdo',async()=>{
+   const {AuditService}=await import('../backend/dist/common/audit.service.js');const audit=app.get(AuditService);
+   await audit.flush();await pool.query('DELETE FROM login_attempts');await pool.query('DELETE FROM security_audit');
+   const result=await request('/api/auth/login',{method:'POST',body:{username:player.username,password}});assert.equal(result.status,200);
+   const deny=await request('/api/users',{method:'POST',session:player,body:{username:'target_audit',password}});assert.equal(deny.status,403);
+   await audit.flush();
+   const rows=(await pool.query('SELECT * FROM security_audit')).rows;
+   const login=rows.find(r=>r.event==='auth.login'&&r.correlation===result.headers.get('x-request-id'));assert.equal(login.actor,player.id);assert.equal(login.outcome,200);
+   assert.ok(rows.some(r=>r.event==='users.create'&&r.outcome===403));
+   const serialized=JSON.stringify(rows);for(const secret of [password,player.cookie,player.csrfToken])assert.ok(!serialized.includes(secret));
+   assert.ok(rows.every(r=>!('body' in r)&&!('headers' in r)));
+   for(let i=0;i<1000;i++)audit.capture({path:'/api/auth/login',method:'POST',ip:`127.0.${Math.floor(i/200)}.${i%200+1}`,body:{username:'missing',password}}, {statusCode:401,locals:{}},randomUUID());
+   assert.ok(audit.pending<=60);await audit.flush();
+   assert.ok((await pool.query('SELECT count(*)::int AS n FROM security_audit')).rows[0].n<=62);
+   // Verify fixed ring overwrites instead of growing; advance only disposable sequence.
+   await pool.query("SELECT setval('security_audit_slot',50000)");
+   audit.capture({path:'/api/auth/logout',method:'POST',ip:'127.0.0.1',identity:{user:{id:player.id}}},{statusCode:204,locals:{}},randomUUID());await audit.flush();
+   assert.ok((await pool.query('SELECT max(slot) AS n FROM security_audit')).rows[0].n<=50000);
+   await pool.query("UPDATE security_audit SET occurred_at=now()-interval '31 days'");
+   for(let i=0;i<60;i++)await audit.flush();
+   assert.equal((await pool.query("SELECT count(*)::int AS n FROM security_audit WHERE occurred_at<now()-interval '30 days'")).rows[0].n,0);
+  });
+
+});
+
+test('SEC-07: orçamento global atômico em 24 transações concorrentes sem conexão aninhada',async()=>{
+ // Module suite closes its private DB, so this case owns another disposable DB.
+ const name=`emulador_budget_${randomBytes(8).toString('hex')}`,root=new pg.Pool(databaseConfig());let db,instance,owned=false;
+ const previous=process.env.PGDATABASE,storageBefore=process.env.CATALOG_STORAGE_DIR;let dir;
+ try{
+  await root.query(`CREATE DATABASE "${name}"`);owned=true;process.env.PGDATABASE=name;dir=await mkdtemp(join(tmpdir(),'budget-'));process.env.CATALOG_STORAGE_DIR=dir;
+  db=new pg.Pool(databaseConfig());const {migrate}=await import('../backend/dist/database/migrations.js');await migrate(db);
+  const {createApp:makeApp}=await import('../backend/dist/app.js');instance=await makeApp();const {RateLimitService}=await import('../backend/dist/auth/rate-limit.service.js');const limits=instance.get(RateLimitService);
+  const results=await Promise.all(Array.from({length:24},async(_,i)=>{await limits.prepareBudget('concurrent-budget',String(i));const client=await db.connect();try{await client.query('BEGIN');await limits.budget('concurrent-budget','global',1,100,10,1000,client);await limits.budget('concurrent-budget',String(i),1,100,10,1000,client);await client.query('COMMIT');return 200;}catch(e){await client.query('ROLLBACK');return e.getStatus?.()??500;}finally{client.release();}}));
+  assert.equal(results.filter(s=>s===200).length,10);assert.equal(results.filter(s=>s===429).length,14);
+ }finally{await instance?.close();await db?.end();if(owned)await root.query(`DROP DATABASE "${name}" WITH (FORCE)`);await root.end();if(dir)await rm(dir,{recursive:true,force:true});if(previous===undefined)delete process.env.PGDATABASE;else process.env.PGDATABASE=previous;if(storageBefore===undefined)delete process.env.CATALOG_STORAGE_DIR;else process.env.CATALOG_STORAGE_DIR=storageBefore;}
 });

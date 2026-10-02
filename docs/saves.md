@@ -37,3 +37,5 @@ Limite explícito: um state capturado antes de o GBA identificar qualquer memór
 ## Backup
 
 Backup v4 inclui dados/metadados de states, tombstones de slots e marcadores de reset no dump transacional, além de nativos e arquivos privados. Manifesto registra checksums/tamanhos/compatibilidade dos ocupados e marcadores de reset. A mesma trava global protege o snapshot contra escritas concorrentes. Restauração confere payloads no PostgreSQL isolado. v1/v2/v3 continuam aceitos; nenhum state é inventado ao restaurar formato anterior. O backup de dados não inclui automaticamente o binário do core. Preserve também sua compilação/fontes fixadas para compatibilidade futura. Procedimentos em [operação](operacao.md#persistência-backup-e-restauração).
+
+States também têm [orçamentos persistentes por jogador/global](seguranca.md#orçamento-de-states), separados do autosave nativo. Em HTTP 429, aguarde `Retry-After` antes de repetir; um retry idêntico confirmado não cria outra versão.

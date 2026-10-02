@@ -94,3 +94,9 @@ Após avaliação positiva inicial dos states pelo usuário, autorizado commit l
 Corrigida a geometria do slider de volume sem alterar ganho/mute/preferências. Player maximiza canvas e toque, com fallback na página, Mais controles e retorno ao layout anterior. D-pad refinado como peça contínua, preservando centro neutro, alvos independentes e multitoque. Usuário testou e aprovou os resultados; autorizou este fechamento com commit local na branch atual.
 
 Guia de uso, contrato do player, continuidade e operação revisados; registrada a pendência do init local antigo, sem executá-lo. [Evidências](validacao.md#01102026--volume-mobile-e-d-pad) das etapas reaproveitadas; fechamento apenas documental e Git, sem repetir builds/suítes, alterar dados/serviços, fazer push ou implantar em servidor.
+
+## 01/10/2026 — segurança preparada, sem aplicação em dados pessoais
+
+Implementadas as quatro etapas autorizadas: admissão/retenção e login desacoplado; orçamento de states/auditoria; MFA MASTER; CSP e configuração de runtime/containers. Instalação e upgrade 001–006→010, recuperação/ACL e fluxos focados ensaiados em recursos descartáveis. Nenhum serviço pessoal, credencial pessoal, servidor ou publicação alterado. Matrícula MFA pelo dono e aceite remoto seguem pendentes. Detalhes úteis no [contrato de segurança](seguranca.md), [operação](operacao.md#upgrade-de-segurança-007010) e [evidências](validacao.md#01102026--segurança-em-quatro-etapas).
+
+Fechamento documental da etapa: procedimentos de instalação/upgrade e recuperação conferidos contra os scripts, com aplicação operacional ainda pendente. Código, migrações, testes e contratos consolidados em commit local; sem push ou manutenção do ambiente pessoal. Evidências de execução anteriores foram reaproveitadas, sem novos builds/suítes neste fechamento. Corrigida somente uma comparação opcional que impedia a checagem TypeScript do backend; typecheck focado passou, sem mudança na decisão de bloqueio.

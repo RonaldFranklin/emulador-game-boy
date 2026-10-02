@@ -6,6 +6,12 @@ export interface UserRow {
   blocked: boolean;
   must_change_password: boolean;
   created_at: Date;
+  mfa_secret: string | null;
+  mfa_last_step: string;
+  mfa_recovery_hashes: string[];
+  mfa_pending_secret: string | null;
+  mfa_pending_until: Date | null;
+  mfa_pending_session: string | null;
 }
 
 export function publicUser(row: UserRow) {

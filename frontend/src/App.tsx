@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { api, ApiError, errorMessage } from './api';
+import { solveLoginProof } from './login-proof';
 import type { Request, Session } from './api';
 import { Alert, Brand, Icon, Loading, PasswordFields } from './ui';
+import { Mfa, RecoveryCodes } from './Mfa';
 import { Users } from './Users';
 import { ThemeToggle } from './ThemeToggle';
 import { Games } from './Games';
@@ -11,9 +13,10 @@ import { Saves } from './Saves';
 import { Player } from './Player';
 import type { Game } from './games';
 
-type Page = 'games' | 'catalogue' | 'users' | 'password' | 'saves' | 'adminSaves';
+type Page = 'games' | 'catalogue' | 'users' | 'password' | 'saves' | 'adminSaves' | 'security';
 
 export function App() {
+  const [recoveryCodes,setRecoveryCodes]=useState<string[]>([]);
   const [playing, setPlaying] = useState<Game | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [checking, setChecking] = useState(true);
@@ -39,6 +42,7 @@ export function App() {
   }, [attempt]);
 
   const endSession = useCallback((message: string) => {
+    setRecoveryCodes([]);
     setPlaying(null);
     setSession(null);
     setPage('games');
@@ -51,6 +55,7 @@ export function App() {
       return await api(path, { ...options, csrfToken: session?.csrfToken });
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) endSession('Sua sessão foi encerrada. Entre novamente para continuar.');
+      if(error instanceof ApiError&&error.code==='MFA_REAUTH_REQUIRED')setPage('security');
       throw error;
     }
   }, [session?.csrfToken, endSession]);
@@ -73,6 +78,10 @@ export function App() {
   if (connectionError) return <div className="startup"><Brand /><div className="startup-theme"><ThemeToggle /></div><div className="startup-error"><Alert>{connectionError}</Alert><button className="button primary" onClick={() => setAttempt((value) => value + 1)}>Tentar novamente</button></div></div>;
   if (!session) return <Login notice={notice} onLogin={(next) => { setSession(next); setNotice(''); setPage('games'); }} />;
 
+  const verified=(next:Session,codes?:string[])=>{setSession(next);if(codes)setRecoveryCodes(codes);setPage(session.mfa==='verified'?'security':'games');};
+  if(recoveryCodes.length)return <main className="content-width"><RecoveryCodes codes={recoveryCodes} onDone={()=>setRecoveryCodes([])}/></main>;
+  if(session.mfa==='enroll'||session.mfa==='verify')return <main className="content-width"><Mfa session={session} request={request} onVerified={verified}/><button className="button secondary" disabled={signingOut} onClick={()=>void logout()}>Sair</button>{logoutError&&<Alert>{logoutError}</Alert>}</main>;
+
   const forcedPassword = session.user.mustChangePassword;
   const activePage = forcedPassword ? 'password' : page;
 
@@ -86,6 +95,7 @@ export function App() {
         {!forcedPassword && session.user.role === 'MASTER' && <button className={activePage === 'users' ? 'nav-item active' : 'nav-item'} onClick={() => setPage('users')} aria-current={activePage === 'users' ? 'page' : undefined}><Icon name="users" />Administração</button>}
         {!forcedPassword && <button className={activePage === 'saves' ? 'nav-item active' : 'nav-item'} aria-current={activePage === 'saves' ? 'page' : undefined} onClick={()=>setPage('saves')}>Meus saves</button>}
         {!forcedPassword && session.user.role==='MASTER' && <button className={activePage === 'adminSaves' ? 'nav-item active' : 'nav-item'} aria-current={activePage === 'adminSaves' ? 'page' : undefined} onClick={()=>setPage('adminSaves')}>Administração de saves</button>}
+        {!forcedPassword&&session.user.role==='MASTER'&&<button className={activePage==='security'?'nav-item active':'nav-item'} onClick={()=>setPage('security')}>Segurança do master</button>}
         <button className={activePage === 'password' ? 'nav-item active' : 'nav-item'} onClick={() => setPage('password')} aria-current={activePage === 'password' ? 'page' : undefined}><Icon name="lock" />Minha senha</button>
       </nav>}
       <main id="main-content" tabIndex={-1}>
@@ -95,6 +105,7 @@ export function App() {
         {activePage === 'users' && session.user.role === 'MASTER' && <Users request={request} currentUserId={session.user.id} />}
         {!playing && activePage === 'saves' && <Saves request={request}/>}
         {!playing && activePage === 'adminSaves' && session.user.role==='MASTER' && <Saves request={request} admin/>}
+        {activePage==='security'&&session.user.role==='MASTER'&&<Mfa session={session} request={request} onVerified={verified}/>}
         {activePage === 'password' && <ChangePassword request={request} forced={forcedPassword} onChanged={() => endSession('Senha atualizada. Todas as suas sessões foram encerradas. Entre com a nova senha.')} />}
       </main>
       <footer className="site-footer"><span>Emulador Game Boy</span><span>Um lugar para os clássicos.</span></footer>
@@ -107,6 +118,8 @@ function Login({ notice, onLogin }: { notice: string; onLogin: (session: Session
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const proofAbort = useRef<AbortController | null>(null);
+  useEffect(()=>()=>proofAbort.current?.abort(),[]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -114,7 +127,15 @@ function Login({ notice, onLogin }: { notice: string; onLogin: (session: Session
     setBusy(true);
     setError('');
     try {
-      const session = await api<Session>('/auth/login', { method: 'POST', body: { username, password } });
+      const controller=new AbortController();proofAbort.current=controller;
+      let session:Session;
+      try {session=await api<Session>('/auth/login',{method:'POST',body:{username,password},signal:controller.signal});}
+      catch(error) {
+        if(!(error instanceof ApiError) || !error.challenge) throw error;
+        setError('Verificação adicional em andamento. Mantenha esta página aberta.');
+        const proofNonce=await solveLoginProof(error.challenge,controller.signal);
+        session=await api<Session>('/auth/login',{method:'POST',body:{username,password,proofToken:error.challenge.token,proofNonce},signal:controller.signal});
+      }
       setPassword('');
       onLogin(session);
     } catch (reason) {

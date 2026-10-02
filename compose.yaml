@@ -6,26 +6,46 @@ x-backend: &backend
     context: .
     target: backend
   init: true
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  pids_limit: 128
+  mem_limit: 1g
+  tmpfs: ["/tmp:rw,noexec,nosuid,size=128m,mode=1777"]
+  logging: &bounded-logs
+    driver: local
+    options: {max-size: "10m", max-file: "3"}
   environment: &backend-env
     PGHOST: database
     PGPORT: "5432"
     PGDATABASE: ${APP_DB_NAME:-emulador}
-    PGUSER: emulador
-    PGPASSWORD_FILE: /run/secrets/app_db_password
+    PGUSER: emulador_runtime
+    PGPASSWORD_FILE: /run/secrets/runtime_db_password
     APP_ORIGIN: ${APP_ORIGIN:-http://127.0.0.1:5173}
     PORT: "3001"
     HOST: 0.0.0.0
     COOKIE_SECURE: "false"
     SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-168}
+    MASTER_SESSION_TTL_HOURS: ${MASTER_SESSION_TTL_HOURS:-8}
+    MASTER_IDLE_MINUTES: ${MASTER_IDLE_MINUTES:-15}
+    npm_config_cache: /tmp/npm-cache
     CATALOG_STORAGE_DIR: /data/catalog
   secrets:
-    - app_db_password
+    - runtime_db_password
   networks:
-    - private
+    - data
 
 services:
   database:
     image: postgres:18.6-bookworm
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER, SETUID, SETGID, DAC_OVERRIDE]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 256
+    mem_limit: 1g
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=64m,mode=1777", "/var/run/postgresql:rw,nosuid,size=16m,mode=3777"]
+    logging: *bounded-logs
     environment:
       POSTGRES_USER: postgres
       POSTGRES_DB: emulador
@@ -34,23 +54,54 @@ services:
     secrets:
       - postgres_password
       - app_db_password
+      - runtime_db_password
     volumes:
       - postgres_data:/var/lib/postgresql
       - ./docker/init-db.sh:/docker-entrypoint-initdb.d/10-app-role.sh:ro
+      - ./docker/provision-runtime.sh:/opt/emulador/provision-runtime.sh:ro
     networks:
-      - private
+      - data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d emulador"]
       interval: 3s
       timeout: 3s
       retries: 20
 
+  provision-runtime:
+    image: postgres:18.6-bookworm
+    profiles: ["maintenance"]
+    user: postgres
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 32
+    mem_limit: 128m
+    environment:
+      PGHOST: database
+      PGDATABASE: ${APP_DB_NAME:-emulador}
+    secrets: [postgres_password, runtime_db_password]
+    volumes: ["./docker/provision-runtime.sh:/opt/emulador/provision-runtime.sh:ro"]
+    networks: [data]
+    command: ["sh", "/opt/emulador/provision-runtime.sh"]
+
   migrate:
     <<: *backend
+    environment: &migrator-env
+      <<: *backend-env
+      PGUSER: emulador
+      PGPASSWORD_FILE: /run/secrets/app_db_password
+    secrets: [app_db_password]
     command: ["npm", "run", "migrate", "--workspace", "backend"]
     depends_on:
       database:
         condition: service_healthy
+
+  grant-runtime:
+    <<: *backend
+    profiles: ["maintenance"]
+    environment: *migrator-env
+    secrets: [app_db_password]
+    command: ["node", "backend/dist/database/grant-runtime.js"]
 
   bootstrap:
     <<: *backend
@@ -67,7 +118,7 @@ services:
       local.emulador.bootstrap-source: ${BOOTSTRAP_ENV_SOURCE:-./.env.example}
     command: ["node", "backend/dist/cli/bootstrap-master-env.js"]
     environment:
-      <<: *backend-env
+      <<: *migrator-env
       BOOTSTRAP_ENV_FILE: /run/secrets/bootstrap_env
     secrets:
       - app_db_password
@@ -81,6 +132,9 @@ services:
     environment:
       <<: *backend-env
       TRUSTED_PROXY_HOST: frontend
+      MFA_ENCRYPTION_KEY_FILE: /run/secrets/mfa_encryption_key
+    secrets: [runtime_db_password, mfa_encryption_key]
+    networks: [api, data]
     volumes:
       - catalog_data:/data/catalog
     depends_on:
@@ -98,12 +152,21 @@ services:
       context: .
       target: frontend
     init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 128
+    mem_limit: 512m
+    tmpfs: ["/tmp:rw,nosuid,size=128m,mode=1777"]
+    logging: *bounded-logs
     environment:
+      VITE_CACHE_DIR: /tmp/vite-cache
+      npm_config_cache: /tmp/npm-cache
       API_PROXY_TARGET: http://backend:3001
     ports:
       - "127.0.0.1:${WEB_PORT:-5173}:5173"
     networks:
-      - private
+      - api
       - web
     depends_on:
       backend:
@@ -112,6 +175,7 @@ services:
   test:
     <<: *backend
     profiles: ["test"]
+    read_only: false
     command: ["npm", "test"]
     environment:
       <<: *backend-env
@@ -122,7 +186,7 @@ services:
     secrets:
       - postgres_password
     networks:
-      - private
+      - data
       - web
     depends_on:
       database:
@@ -146,13 +210,15 @@ services:
     secrets:
       - postgres_password
     networks:
-      - private
+      - data
     depends_on:
       database:
         condition: service_healthy
 
 networks:
-  private:
+  data:
+    internal: true
+  api:
     internal: true
   web:
 
@@ -166,6 +232,10 @@ secrets:
     file: ./.local/secrets/postgres_password
   app_db_password:
     file: ./.local/secrets/app_db_password
+  runtime_db_password:
+    file: ./.local/secrets/runtime_db_password
+  mfa_encryption_key:
+    file: ./.local/secrets/mfa_encryption_key
   bootstrap_env:
     # setup selects the private file. With no selector, the empty public
     # template permits existing databases to boot and new ones fail closed.

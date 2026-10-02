@@ -1,3 +1,4 @@
+import { verifiedMaster } from './helpers/verified-master.mjs';
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
@@ -61,6 +62,7 @@ async function request(path, { method = 'GET', body, session, headers: overrides
 async function login(username) {
   const response = await request('/api/auth/login', { method: 'POST', body: { username, password: secret } });
   assert.equal(response.status, 200);
+  await verifiedMaster(pool,response.data.user,response.headers.get('set-cookie').split(';')[0]);
   return { cookie: response.headers.get('set-cookie').split(';')[0], csrfToken: response.data.csrfToken };
 }
 

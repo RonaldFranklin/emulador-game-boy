@@ -1,10 +1,14 @@
 import 'reflect-metadata';
+import { randomUUID } from 'node:crypto';
+import { AuditService } from './common/audit.service.js';
+import type { AuthRequest } from './auth/session.js';
 import { BadRequestException, HttpException, Global, Module, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { clientIp } from './common/client-ip.js';
-import { RateLimitService } from './auth/rate-limit.service.js';
+import { Admission } from './common/admission.js';
+import { AdmissionInterceptor } from './common/admission.interceptor.js';
 import { AuthModule } from './auth/auth.module.js';
 import { CONFIG } from './auth/session.js';
 import { HttpExceptionFilter } from './common/http-exception.filter.js';
@@ -27,6 +31,25 @@ export async function createApp(): Promise<NestExpressApplication> {
   const config = app.get<ReturnType<typeof readConfig>>(CONFIG);
   app.disable('x-powered-by');
   app.set('trust proxy', false);
+  const audit=app.get(AuditService);
+  app.use((request: Request,response: Response,next: NextFunction)=>{
+    const correlation=randomUUID();response.setHeader('X-Request-ID',correlation);
+    response.once('finish',()=>audit.capture(request as AuthRequest,response,correlation));next();
+  });
+  const admission = new Admission();
+  // Applied even before proxy DNS, guards, parsers and database access.
+  app.use((request: Request,response: Response,next: NextFunction) => {
+    try {
+      admission.take('global',6000,60_000);
+      const login=/^\/api\/auth\/login\/?$/i.test(request.path);
+      admission.take(login?'route-login':'route-general',login?120:6000,60_000);
+      const release=admission.enter(login); response.locals.releaseAdmission=release; response.once('finish',release);
+      next();
+    } catch(error) {
+      const body=(error as HttpException).getResponse() as {message:string;retryAfterSeconds:number};
+      response.setHeader('Retry-After',body.retryAfterSeconds);response.status(429).json({statusCode:429,message:body.message});
+    }
+  });
   app.use((request: Request, response: Response, next: NextFunction) => {
     response.setHeader('Cache-Control', 'no-store');
     response.setHeader('X-Content-Type-Options', 'nosniff');
@@ -51,18 +74,20 @@ export async function createApp(): Promise<NestExpressApplication> {
     }
     next();
   });
-  const limits = app.get(RateLimitService);
   app.use(async (request: Request, response: Response, next: NextFunction) => {
     try {
       const ip = await clientIp(request, /^\/api\/health\/?$/i.test(request.path) ? undefined : config.trustedProxyHost);
+      if(request.aborted||response.destroyed){response.locals.releaseAdmission?.();return;}
       Object.defineProperty(request, 'ip', { value: ip, configurable: true });
       // Separate from failed-login policy; includes malformed bodies before parsing.
-      await limits.bucket('requests', ip, 1200, 60);
+      admission.take(`requests:${ip}`,1200,60_000);
       if (request.method === 'POST' && /^\/api\/auth\/login\/?$/i.test(request.path)) {
-        await limits.bucket('login-burst', ip, 30, 60);
+        admission.take(`login-burst:${ip}`,30,60_000);
       }
       next();
     } catch (error) {
+      response.locals.releaseAdmission?.();
+      if(response.destroyed)return;
       if (error instanceof HttpException) {
         const body = error.getResponse() as { message: string; retryAfterSeconds: number };
         response.setHeader('Retry-After', body.retryAfterSeconds);
@@ -88,8 +113,11 @@ export async function createApp(): Promise<NestExpressApplication> {
     exceptionFactory: () => new BadRequestException('Dados inválidos. Confira os campos enviados.'),
   }));
   app.useGlobalFilters(new HttpExceptionFilter());
+  app.useGlobalInterceptors(new AdmissionInterceptor());
   app.enableShutdownHooks();
   const server = app.getHttpServer();
+  server.maxConnections = 64;
+  server.maxRequestsPerSocket = 100;
   server.headersTimeout = 15_000;
   server.requestTimeout = 65_000;
   await app.init();

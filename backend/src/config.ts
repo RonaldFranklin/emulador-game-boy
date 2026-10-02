@@ -8,6 +8,9 @@ export interface AppConfig {
   port: number;
   secureCookie: boolean;
   sessionTtlHours: number;
+  masterTtlHours: number;
+  masterIdleMinutes: number;
+  mfaEncryptionKey?: Buffer;
   catalogStorageDir: string;
 }
 
@@ -35,8 +38,14 @@ export function readConfig(): AppConfig {
   if (!isAbsolute(catalogStorageDir) || resolve(catalogStorageDir) === '/') {
     throw new Error('CATALOG_STORAGE_DIR deve ser um diretório absoluto específico para o catálogo.');
   }
+  const mfaFile=process.env.MFA_ENCRYPTION_KEY_FILE;
+  const mfaText=mfaFile?readFileSync(mfaFile,'utf8').trim():undefined;
+  if(mfaText!==undefined&&!/^[0-9a-f]{64}$/.test(mfaText))throw new Error('Chave MFA inválida; use arquivo hexadecimal de 32 bytes.');
   return {
     origin,
+    mfaEncryptionKey:mfaText?Buffer.from(mfaText,'hex'):undefined,
+    masterTtlHours:integer('MASTER_SESSION_TTL_HOURS',8,1,8),
+    masterIdleMinutes:integer('MASTER_IDLE_MINUTES',15,1,30),
     trustedProxyHost: process.env.TRUSTED_PROXY_HOST || undefined,
     catalogStorageDir: resolve(catalogStorageDir),
     host: process.env.HOST ?? '0.0.0.0',
@@ -54,7 +63,7 @@ export function databaseConfig() {
     host: process.env.PGHOST ?? '127.0.0.1',
     port: integer('PGPORT', 5432, 1, 65535),
     database: process.env.PGDATABASE ?? 'emulador',
-    user: process.env.PGUSER ?? 'emulador',
+    user: process.env.PGUSER ?? 'emulador_runtime',
     password,
     max: 12,
     connectionTimeoutMillis: 5_000,

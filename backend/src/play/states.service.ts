@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, HttpException, Injectable, NotFoundException } from '@nestjs/common';
 import { createHash, randomUUID } from 'node:crypto';
 import type { SessionIdentity } from '../auth/session.js';
+import { RateLimitService } from '../auth/rate-limit.service.js';
 import { SessionService } from '../auth/session.service.js';
 import { CATALOG_LOCK_KEY } from '../games/catalog-constants.js';
 import { leaseInput } from './play-input.js';
@@ -19,23 +20,27 @@ function decode(value: unknown, max: number, empty=false): Buffer {
 }
 @Injectable()
 export class StatesService {
- constructor(private readonly sessions: SessionService, private readonly play: PlayService) {}
- slots(id: string, identity: SessionIdentity) {return this.play.withGame(id,identity,false,async(client,game)=>({coreId:STATE_CORE,romHash:game.rom_sha256,slots:(await client.query(`SELECT ${columns} FROM save_states WHERE user_id=$1 AND game_id=$2 ORDER BY slot`,[identity.user.id,id])).rows}));}
- read(id: string, slot: number, identity: SessionIdentity, input: unknown) {
+ constructor(private readonly sessions: SessionService, private readonly play: PlayService, private readonly limits:RateLimitService) {}
+ async slots(id: string, identity: SessionIdentity) {await this.limits.bucket('states-list',identity.user.id,60,60);return this.play.withGame(id,identity,false,async(client,game)=>({coreId:STATE_CORE,romHash:game.rom_sha256,slots:(await client.query(`SELECT ${columns} FROM save_states WHERE user_id=$1 AND game_id=$2 ORDER BY slot`,[identity.user.id,id])).rows}));}
+ async read(id: string, slot: number, identity: SessionIdentity, input: unknown) {
   const b=object(input,['leaseId','version']);const v=version(b.version);leaseInput({leaseId:b.leaseId});
+  await this.limits.prepareBudget('states-read',identity.user.id);
   return this.play.withGame(id,identity,true,async(client,game)=>{
    await this.play.requireLease(client,id,identity,b.leaseId);
    const row=(await client.query(`SELECT ${columns},data,native FROM save_states WHERE user_id=$1 AND game_id=$2 AND slot=$3`,[identity.user.id,id,slot])).rows[0];
    if(!row?.occupied)throw new NotFoundException('Slot vazio.');if(row.version!==v)throw new ConflictException('O slot mudou. Atualize antes de carregar.');
    if(row.coreId!==STATE_CORE||row.romHash!==game.rom_sha256||row.console!==game.console||row.format!==1||hash(row.data)!==row.sha256||hash(row.native)!==row.nativeSha256)throw new ConflictException('Estado incompatível ou corrompido; progresso atual preservado.');
+   await this.limits.budget('states-read','global',1,row.data.length+row.native.length,240,128*1024**2,client);
+   await this.limits.budget('states-read',identity.user.id,1,row.data.length+row.native.length,20,32*1024**2,client);
    const {data,native,...meta}=row;return {state:{...meta,dataBase64:data.toString('base64'),nativeBase64:native.toString('base64')}};
   });
  }
- write(id: string,slot: number,identity:SessionIdentity,input:unknown) {
+ async write(id: string,slot: number,identity:SessionIdentity,input:unknown) {
   const b=object(input,['leaseId','version','label','coreId','romHash','format','dataBase64','nativeBase64','sha256','nativeSha256']);const v=version(b.version);leaseInput({leaseId:b.leaseId});
   if(typeof b.label!=='string'||b.label.length>80||b.coreId!==STATE_CORE||b.format!==1)throw new BadRequestException('Rótulo ou formato/core incompatível.');
   const data=decode(b.dataBase64,524288),native=decode(b.nativeBase64,1048576,true);
   if(hash(data)!==b.sha256||hash(native)!==b.nativeSha256)throw new BadRequestException('Checksum do estado inválido.');
+  await this.limits.prepareBudget('states-write',identity.user.id);
   return this.play.withGame(id,identity,true,async(client,game)=>{
    await this.play.requireLease(client,id,identity,b.leaseId);
    if(b.romHash!==game.rom_sha256||data.length!==(game.console==='GB'?71680:397312))throw new BadRequestException('Estado não corresponde à ROM/console/tamanho esperado.');
@@ -43,6 +48,8 @@ export class StatesService {
    // Same payload+label at v+1 is an idempotent retry after a lost response.
    if(old?.version===v+1&&old.sha256===b.sha256&&old.native_sha256===b.nativeSha256&&old.label===b.label)return {version:old.version};
    if((old?.version??0)!==v)throw new ConflictException('O slot mudou. Atualize e confirme novamente.');
+   await this.limits.budget('states-write','global',1,data.length+native.length,120,64*1024**2,client);
+   await this.limits.budget('states-write',identity.user.id,1,data.length+native.length,10,8*1024**2,client);
    const quota=(await client.query('SELECT coalesce(sum(octet_length(data)+octet_length(native)),0)::bigint AS total,coalesce(sum(octet_length(data)+octet_length(native)) FILTER(WHERE user_id=$1),0)::bigint AS own FROM save_states',[identity.user.id])).rows[0];
    const delta=data.length+native.length-(old?.data?.length??0)-(old?.native?.length??0);
    if(Number(quota.total)+delta>256*1024**2||Number(quota.own)+delta>32*1024**2)throw new HttpException('Quota de estados atingida (32 MiB por usuário / 256 MiB global).',507);
