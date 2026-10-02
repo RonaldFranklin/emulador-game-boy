@@ -67,6 +67,8 @@ Para builds no host, `npm run prepare:emulator` prepara os assets locais usando 
 
 Baseline publicado `5a771c8`: volume, mobile/fullscreen, D-pad, saves e demais funções preservados. Em 01/10/2026 foram preparados limites/retenção, auditoria/orçamentos, MFA MASTER, CSP Report-Only e isolamento runtime/containers. Migrações novas 007–010 somente em bancos descartáveis; **não aplicadas ao ambiente pessoal ou servidor**. Etapa consolidada em commit local, sem envio ou implantação. Resultados focados em [validação](validacao.md#01102026--segurança-em-quatro-etapas); contrato e pendências reais na [matriz SEC/OPS](seguranca.md#matriz-de-entrega-e-aceite-pendente). Próximo passo operacional depende de autorização, backup verificado, upgrade conjunto e cadastro MFA pelo dono; proxy externo, enforcement CSP e backup externo dependem de aplicação e aceite operacional próprios.
 
+Rechecagem RECHECK-01: corrigida a cobrança parcial de ingresso de states, com regressões isoladas em duas APIs; alteração posterior a `9b6b5d2`, consolidada em commit local, sem envio ou aplicação operacional. Não altera as pendências SEC-03/04/05/06/08/OPS-01 da matriz.
+
 Pendência operacional real: regularizar o container local de init antigo em manutenção separada; diagnóstico e procedimento em [operação](operacao.md#pendência-local-de-init-antigo--01102026). O código das quatro etapas está entregue; isso não encerra os aceites operacionais da matriz. Viewports móveis simulados em Chromium não validam aparelhos físicos/notch ou outros navegadores; áudio não teve avaliação auditiva humana. Limites de persistência/core permanecem em [saves](saves.md).
 
 ### Planejar implantação separadamente

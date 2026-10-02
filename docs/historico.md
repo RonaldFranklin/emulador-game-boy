@@ -100,3 +100,7 @@ Guia de uso, contrato do player, continuidade e operação revisados; registrada
 Implementadas as quatro etapas autorizadas: admissão/retenção e login desacoplado; orçamento de states/auditoria; MFA MASTER; CSP e configuração de runtime/containers. Instalação e upgrade 001–006→010, recuperação/ACL e fluxos focados ensaiados em recursos descartáveis. Nenhum serviço pessoal, credencial pessoal, servidor ou publicação alterado. Matrícula MFA pelo dono e aceite remoto seguem pendentes. Detalhes úteis no [contrato de segurança](seguranca.md), [operação](operacao.md#upgrade-de-segurança-007010) e [evidências](validacao.md#01102026--segurança-em-quatro-etapas).
 
 Fechamento documental da etapa: procedimentos de instalação/upgrade e recuperação conferidos contra os scripts, com aplicação operacional ainda pendente. Código, migrações, testes e contratos consolidados em commit local; sem push ou manutenção do ambiente pessoal. Evidências de execução anteriores foram reaproveitadas, sem novos builds/suítes neste fechamento. Corrigida somente uma comparação opcional que impedia a checagem TypeScript do backend; typecheck focado passou, sem mudança na decisão de bloqueio.
+
+## 01/10/2026 — rechecagem de ingresso de states
+
+Corrigida cobrança global por pedidos já recusados pela quota individual. Checagem/débito de ator e global agora são atômicos antes do parser, sem alterar limites, gravação/versionamento ou migrações. Evidências focadas em [validação](validacao.md#01102026--recheck-01-admissão-de-states); aplicação operacional permanece pendente.

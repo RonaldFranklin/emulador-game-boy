@@ -55,6 +55,37 @@ export class RateLimitService implements OnModuleInit, OnModuleDestroy {
     if (!result.rowCount || result.rows[0]!.attempts > maximum) throw limited('Muitas requisições. Aguarde o prazo indicado antes de tentar novamente.', result.rows[0]?.retry ?? 1);
   }
 
+  async admitStateIngress(actorId: string): Promise<void> {
+    const keys = [hashToken('states-ingress-global:global'), hashToken(`states-ingress:${actorId}`)];
+    // Capacity insertion must finish BEFORE taking any admission row locks.
+    // A fresh placeholder represents an expired window, not a charged request.
+    for (const key of keys) await this.ensure(key, 60, 1, true);
+    await this.database.transaction(async (client) => {
+      // All instances use global -> actor. Never ensure/reinsert under these locks:
+      // cleanup may have removed a placeholder; fail closed and let the caller retry.
+      for (const key of keys) {
+        const locked = await client.query('SELECT key FROM login_attempts WHERE key=$1 FOR UPDATE', [key]);
+        if (!locked.rowCount) throw limited('Admissão temporariamente indisponível. Tente novamente.', 1);
+      }
+      const result = await client.query<{key:string; attempts:number; fresh:boolean; retry:number}>(
+        `SELECT key,attempts,window_start<=statement_timestamp()-interval '1 minute' AS fresh,
+         CEIL(EXTRACT(EPOCH FROM window_start+interval '1 minute'-statement_timestamp()))::int AS retry
+         FROM login_attempts WHERE key=ANY($1::text[])`, [keys]);
+      const rows = keys.map(key => result.rows.find(row => row.key === key)!);
+      const maxima = [120, 20];
+      const retry = Math.max(0, ...rows.map((row, index) =>
+        !row.fresh && row.attempts >= maxima[index]! ? row.retry : 0));
+      if (retry > 0) throw limited('Muitas requisições de estados. Aguarde antes de tentar novamente.', retry);
+      for (const row of rows) {
+        await client.query(`UPDATE login_attempts SET attempts=$2,
+          window_start=CASE WHEN $3 THEN statement_timestamp() ELSE window_start END,
+          expires_at=statement_timestamp()+interval '1 minute' WHERE key=$1`,
+        [row.key, row.fresh ? 1 : row.attempts + 1, row.fresh]);
+      }
+    });
+    // Commit precedes body parsing/network waits. Later invalid bodies are not refunded.
+  }
+
   async prepareBudget(namespace:string,identity:string) {
     // Insert before acquiring user/catalog/budget locks. Do not invert the
     // global capacity lock with a budget row under concurrent first use.

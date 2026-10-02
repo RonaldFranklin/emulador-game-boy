@@ -523,3 +523,21 @@ Limites: prova de trabalho não impede botnet; admissão em memória é por inst
 ### Fechamento para commit local
 
 Revisados os 68 arquivos da etapa, scripts de instalação/upgrade/recuperação, links locais/âncoras, conteúdo elegível/staged e `git diff --check`. Os 29 casos e builds anteriores não foram repetidos. A conferência dos logs identificou TS2532 no último build backend: o prazo opcional da consulta passou a usar `?? 0` antes da comparação, preservando a decisão anterior quando não há linha. `npm run typecheck --workspace backend` passou após esse ajuste pontual; nenhum build completo ou teste comportamental foi reexecutado. Evidências intermediárias com falha não são aprovação final. Sem operação de serviços/dados, aplicação das migrações ou cadastro MFA pessoal neste fechamento.
+
+## 01/10/2026 — RECHECK-01: admissão de states
+
+Rechecagem posterior a `9b6b5d2`, sem aplicação no ambiente pessoal/servidor. Corrigida confirmação do débito global antes de verificar a quota individual: ingresso agora verifica ambos e confirma ambos na mesma transação. Preparação de chaves termina antes das travas global → ator; remoção concorrente recusa com prazo curto, sem bypass/reinserção sob trava. Chamadas adjacentes de orçamento de leitura/gravação já compartilhavam transação e foram preservadas.
+
+**Resultados da implementação: 8 casos passaram**, seis em `tests/state-ingress.integration.test.mjs` e dois SEC-07 existentes em `tests/play.integration.test.mjs`. PostgreSQL 18.6 descartável em rede interna sem portas publicadas/volumes pessoais; duas instâncias Nest com pools próprios no mesmo processo de ensaio, compartilhando o banco. Identidades/sessões e payloads exclusivamente sintéticos.
+
+- A admitido 20 vezes; outras 100 recusas mantiveram contadores e prazos intactos. B em outro IP alcançou validação, gravou state e repetiu payload sem duplicar versão.
+- Global esgotado não debitou ator; `Retry-After` e expiração foram conferidos sem esperar um minuto real. Corridas entre APIs respeitaram exatamente 20/ator e 120/global, sem perda de atualização/cobrança parcial.
+- Limpeza entre preparo e aquisição recusou sem débito e permitiu retry; limpeza concorrente e primeira utilização não produziram deadlock. Dois novos atores disputando a última vaga mantiveram o teto de 1000 contadores autenticados.
+- Falha injetada antes do commit reverteu o débito; corpo HTTP incompleto permitiu adquirir ambas as travas com `NOWAIT` por outra conexão, comprovando transação encerrada antes da espera de rede. Abandono não reembolsou ingresso.
+- Reutilizados dois casos de orçamento persistente de writes/reads, bytes, expiração/restart, retry idempotente e 24 transações concorrentes. Não foram repetidas suítes MFA/login/player/backup.
+
+Controle negativo: em cópia descartável do JS compilado, reinstaladas somente as duas chamadas sequenciais antigas. A regressão falhou porque o contador global subiu de 20 a 120 com as recusas de A; isso comprova detecção da falha, não aprovação da versão antiga. Código de trabalho permaneceu corrigido.
+
+`npm run typecheck --workspace backend` e `npm run build --workspace backend` passaram normalmente, sem `--noCheck`; `git diff --check` e links locais conferidos. Logs ignorados em `.local/ingress-recheck/`; recursos Docker exclusivos do ensaio removidos ao concluir. Não houve migração/manutenção do banco pessoal, atualização de serviços, commit ou push. SEC-03/04/05/06/08/OPS-01 continuam sujeitos aos aceites da [matriz](seguranca.md#matriz-de-entrega-e-aceite-pendente): proxy real, CSP ainda Report-Only, MFA pelo dono/chave recuperável, operação da auditoria amostrada, aplicação de papéis/hardening e backup externo.
+
+Fechamento documental para commit local: revisados os sete arquivos, contrato, continuidade, links/âncoras e staged; `git diff --check` aprovado. Reaproveitados os oito testes e typecheck/build acima, sem novas execuções de suítes/builds, alterações funcionais ou operações de serviços/dados. Pendências operacionais permanecem na matriz.

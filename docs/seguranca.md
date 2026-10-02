@@ -32,6 +32,8 @@ Além de tamanho/quota em [saves](saves.md), existem janelas fixas de um minuto 
 | Gravações confirmadas | 10 operações / 8 MiB | 120 operações / 64 MiB |
 | Leitura de conteúdo para carregar | 20 operações / 32 MiB | 240 operações / 128 MiB |
 
+Admissão de ingresso é conjunta: após preparar chaves sob o teto de cardinalidade, uma transação curta trava global → ator, confere ambas as janelas e só debita se ambas admitirem. Rejeição individual não consome global e vice-versa. Chaves removidas pela limpeza entre preparo e trava recusam com 429/`Retry-After: 1`; não são recriadas sob as travas. Falha de banco impede admissão. O commit termina antes de ler o corpo: pedido admitido inválido ou abandonado continua cobrado, sem reembolso. O prazo de recusa atende à maior espera entre as quotas esgotadas.
+
 Bytes contabilizados são estado + memória nativa, sem base64. O corpo de upload tem teto de 2.100.000 bytes; assim a entrada também fica limitada a 42 MB/jogador e 252 MB/global por minuto, incluindo tentativas inválidas. No máximo dois parsers de states simultâneos, timeout 30 s, após autorização/CSRF. Falhas retornam 429 e prazo; repetição idêntica já confirmada não gasta outra gravação, mas ainda passa pela admissão de entrada. Versão, checksum, reserva/geração, quota total e trava de backup continuam obrigatórios. Não ampliar cadência do autosave nativo nem remover travas para superar o orçamento.
 
 ## Auditoria
@@ -75,7 +77,7 @@ Procedimento de upgrade/recuperação e guarda da chave MFA: [operação](operac
 | SEC-04 | CSP Report-Only no HTML e artefato por build; Chromium dev/build GB/GBA sem violações no fluxo ensaiado | Instalar no servidor estático correto, observar fluxos reais e só então decidir enforcement |
 | SEC-05 | TOTP, recuperação única, reautenticação e sessões MASTER próprias; testes sintéticos | Guardar chave/backup e **cada dono cadastrar seu MFA** após aplicação; nenhuma conta pessoal inscrita |
 | SEC-06 | Auditoria estruturada com amostragem/retenção e sem conteúdo privado | Aplicar schema/serviço; definir acompanhamento do operador e destino protegido se necessário |
-| SEC-07 | Orçamentos persistentes de operações/bytes e retries idempotentes | Aplicar API/schema e observar uso; quotas não substituem capacidade de armazenamento |
+| SEC-07 / RECHECK-01 | Orçamentos persistentes e retries idempotentes; ingresso ator/global corrigido atomicamente e revalidado com duas APIs em banco descartável | Aplicar API/schema e observar uso; quotas não substituem capacidade de armazenamento |
 | SEC-08 | Papel runtime separado, redes e containers restritos; instalação/upgrade isolados | Aplicar credenciais/grants/configuração sob manutenção autorizada com backup verificado; adaptar overrides externos |
 | OPS-01 | Backup v4 preservado; restauração isolada de nativo/state e coluna MFA conferida | Definir destino externo, criptografia/chaves, agenda, retenção, responsáveis, RPO/RTO e ensaio integral fora da origem |
 

@@ -50,8 +50,7 @@ export class StateJsonInterceptor extends SaveJsonInterceptor {
    const req=context.switchToHttp().getRequest<AuthRequest>();
    // Request count also bounds ingress bytes: each body is at most 2.1 MB.
    // Kept separate from committed-write budgets so a lost ACK can be retried.
-   await this.limits.bucket('states-ingress-global','global',120,60);
-   await this.limits.bucket('states-ingress',req.identity.user.id,20,60);
+   await this.limits.admitStateIngress(req.identity.user.id);
    return super.intercept(context,next);
  }
 }
